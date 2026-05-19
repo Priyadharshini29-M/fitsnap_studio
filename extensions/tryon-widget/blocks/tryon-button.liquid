@@ -1,0 +1,67 @@
+{%- assign app_enabled = shop.metafields.fitfyce.app_enabled | default: 'true' -%}
+{%- assign variant_mappings_json = product.metafields.tryfit.variant_mappings | default: '{}' -%}
+{%- if app_enabled == 'true' and product.metafields.tryfit.tryon_enabled == 'true' -%}
+
+  <div id="tryfit-btn-wrap" class="tryfit-btn-container tryfit-app-block" data-widget-id="fitfyce-{{ block.id }}">
+    <button
+      type="button"
+      id="tryfit-open-btn"
+      class="tryfit-open-btn"
+      data-product-id="{{ product.id }}"
+      data-product-title="{{ product.title | escape }}"
+      data-variants="{{ product.variants | json | escape }}"
+      data-options="{{ product.options | json | escape }}"
+      data-clothing-images="{{ variant_mappings_json }}"
+      data-featured-image="{{ product.featured_image | image_url: width: 1024 }}"
+      data-proxy-url="https://{{ shop.permanent_domain }}/apps/tryfit"
+      data-shop="{{ shop.permanent_domain }}"
+      data-currency="{{ shop.currency }}"
+      aria-label="Try On This Look"
+      style="
+        background: #111827;
+        color: #FFFFFF;
+        border: none;
+        padding: 10px 24px;
+        font-weight: 600;
+        border-radius: 8px;
+        cursor: pointer;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        margin: 10px 0;
+        box-sizing: border-box;
+        transition: opacity 0.2s;
+        gap: 2px;
+        opacity: 0;
+        visibility: hidden;
+      "
+    >
+      <span class="tryfit-btn-icon" style="display:none;align-items:center;justify-content:center;flex-shrink:0;" aria-hidden="true"></span>
+      <div class="tryfit-btn-text" style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+        <span class="tryfit-btn-title" style="font-weight:600;line-height:1.2;text-align:center;">Try On This Look</span>
+        <span class="tryfit-btn-subtitle" style="display:none;font-size:14px;opacity:0.8;line-height:1.2;text-align:center;"></span>
+      </div>
+    </button>
+  </div>
+
+{%- endif -%}
+
+{%- comment -%}
+  Modal is rendered conditionally so it only appears once even when the block
+  is placed on a page alongside other app blocks. The JS deduplication guard
+  in _ensureOverlayInBody() handles section-reload duplicates at runtime.
+{%- endcomment -%}
+{%- render 'tryon-modal' -%}
+
+{{ 'tryon-widget.js' | asset_url | script_tag }}
+{{ 'tryon-modal.css' | asset_url | stylesheet_tag }}
+
+{% schema %}
+{
+  "name": "FitSnap Try-On",
+  "target": "section",
+  "settings": []
+}
+{% endschema %}

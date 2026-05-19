@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(php \"D:\\\\Digifyce\\\\FitFyce\\\\FitFyce\\\\fitfyce-php\\\\db\\\\test_save_settings.php\")",
+      "Bash(curl *)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "shopify-dev-mcp"
+  ]
+}
