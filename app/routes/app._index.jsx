@@ -298,6 +298,40 @@ FitCard.propTypes = {
   badge: PropTypes.string,
 };
 
+const PLAN_LIMITS = { free: 10, growth: 100, pro: 500 };
+
+const PLAN_FEATURES = {
+  free: [
+    "10 monthly AI try-ons",
+    "Mobile & desktop responsive widget",
+    "Privacy consent screen",
+    "Product page try-on support",
+    "Standard AI processing",
+    "Email support",
+  ],
+  growth: [
+    "100 monthly AI try-ons",
+    "Collection page try-on icons",
+    "Variant image mapping system",
+    "Advanced widget customization",
+    "Analytics dashboard",
+    "Customer email collection",
+    "Faster AI processing",
+    "Standard support",
+  ],
+  pro: [
+    "500 monthly AI try-ons",
+    "Advanced analytics dashboard",
+    "Device-based analytics",
+    "7-day trend reporting",
+    "Multi-language widget support",
+    "Priority AI processing",
+    "Custom icon positioning",
+    "Priority support",
+    "Early access to new features",
+  ],
+};
+
 export default function Index() {
   const {
     plan,
@@ -306,11 +340,15 @@ export default function Index() {
     plans,
     shop,
   } = useLoaderData();
-  const currentPlanRow = plans.find((p) => p.plan === plan?.plan) ?? null;
+  const effectivePlan = (plan?.plan === "basic" ? "free" : plan?.plan) ?? "free";
+  const planLimit = plan?.limit || PLAN_LIMITS[effectivePlan] || 10;
+  const currentPlanRow = plans.find((p) => p.plan === effectivePlan) ?? null;
   const planPrice = currentPlanRow
     ? currentPlanRow.price_inr_monthly === 0
       ? "Free"
       : `₹${currentPlanRow.price_inr_monthly}`
+    : effectivePlan === "free"
+    ? "Free"
     : "—";
   const actionData = useActionData();
   const submit = useSubmit();
@@ -416,13 +454,12 @@ export default function Index() {
           {/* Video Tutorial Section */}
           <div className="vto-video-container">
             <img
-              src="https://images.unsplash.com/photo-1441984908746-d47b8b240bd8?w=1200&q=80"
+              src="/steps/videothumbnail.png"
               alt="Video Thumbnail"
               style={{
                 width: "100%",
                 height: "100%",
                 objectFit: "cover",
-                opacity: 0.5,
               }}
             />
             <div className="vto-play-button">
@@ -610,6 +647,7 @@ export default function Index() {
             }}
           >
             <BlockStack gap="300">
+              {/* Header */}
               <InlineStack align="space-between" blockAlign="center">
                 <Text variant="headingMd" fontWeight="bold">
                   Current Plan
@@ -624,10 +662,11 @@ export default function Index() {
                     fontWeight: "700",
                   }}
                 >
-                  {(plan?.plan ?? "basic").toUpperCase()}
+                  {effectivePlan.toUpperCase()}
                 </div>
               </InlineStack>
 
+              {/* Price + CTA */}
               <div
                 style={{
                   background: "#F9FAFB",
@@ -656,18 +695,43 @@ export default function Index() {
                     size="slim"
                     onClick={() => navigate("/app/plans")}
                   >
-                    {plan?.plan === "premium" ? "Manage" : "Upgrade"}
+                    {effectivePlan === "pro" ? "Manage" : "Upgrade"}
                   </Button>
                 </InlineStack>
               </div>
-              <Text
-                variant="bodyMd"
-                style={{ color: "#111827", lineHeight: 1.6 }}
-              >
-                {plan?.is_unlimited
-                  ? "Unlimited try-ons included."
-                  : `${plan?.used ?? 0} / ${plan?.limit ?? "—"} try-ons used this month.`}
-              </Text>
+
+              {/* Usage bar */}
+              {(() => {
+                const used = plan?.used ?? 0;
+                const pct = planLimit > 0 ? Math.min(100, Math.round((used / planLimit) * 100)) : 0;
+                const barColor = pct >= 90 ? "#EF4444" : pct >= 70 ? "#F59E0B" : "#1D9E75";
+                return (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                      <span style={{ fontSize: "12px", fontWeight: 600, color: "#374151" }}>Monthly Try-Ons</span>
+                      <span style={{ fontSize: "12px", color: "#6B7280" }}>{used} / {planLimit} used</span>
+                    </div>
+                    <div style={{ height: "6px", background: "#F3F4F6", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: barColor, borderRadius: "999px", transition: "width 0.4s ease" }} />
+                    </div>
+                    {pct >= 90 && (
+                      <p style={{ fontSize: "11px", color: "#EF4444", marginTop: "5px", fontWeight: 500 }}>
+                        {pct}% of quota used — extra try-ons are charged per use.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Plan features */}
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {(PLAN_FEATURES[effectivePlan] ?? PLAN_FEATURES.free).map((f, i) => (
+                  <li key={i} style={{ display: "flex", gap: "8px", alignItems: "flex-start", marginBottom: "5px" }}>
+                    <span style={{ color: "#1D9E75", fontWeight: 700, flexShrink: 0, fontSize: "13px" }}>✓</span>
+                    <Text variant="bodySm">{f}</Text>
+                  </li>
+                ))}
+              </ul>
             </BlockStack>
           </div>
         </div>

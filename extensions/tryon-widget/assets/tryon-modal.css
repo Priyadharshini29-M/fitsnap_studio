@@ -1783,18 +1783,18 @@
     padding: 32px;
   }
 
-  /* ── Expand modal to 860 px ── */
+  /* ── Desktop modal: compact medium size ── */
   .tryfit-modal {
-    width:      min(100%, 860px);
-    max-width:  860px;
-    max-height: calc(100svh - 64px);
+    width:      min(100%, 640px);
+    max-width:  640px;
+    max-height: min(80vh, 700px);
   }
 
   .tryfit-step-inner {
-    padding: 44px 40px 40px;
+    padding: 36px 32px 32px;
   }
 
-  .tryfit-heading { font-size: clamp(24px, 2.8vw, 28px); }
+  .tryfit-heading { font-size: clamp(22px, 2.8vw, 26px); }
 
   /* Larger close button for mouse accuracy */
   .tryfit-close {
@@ -1809,42 +1809,42 @@
   }
 
   .tryfit-btn {
-    padding:    16px 28px;
-    font-size:  16px;
+    padding:    14px 24px;
+    font-size:  15px;
     min-height: 48px;
   }
 
   .tryfit-result-action {
-    padding:    12px 22px;
-    font-size:  14px;
-    min-height: 48px;
+    padding:    11px 18px;
+    font-size:  13px;
+    min-height: 46px;
   }
 
   .tryfit-reupload-btn {
-    padding:    11px 24px;
-    font-size:  14px;
-    min-height: 48px;
+    padding:    10px 20px;
+    font-size:  13px;
+    min-height: 44px;
   }
 
-  /* Result grid — wider padding on desktop */
+  /* Result grid — compact padding on desktop */
   .tryfit-result-frame {
-    min-height: 440px;
+    min-height: 320px;
   }
 
   .tryfit-result-product-header {
-    padding: 24px 32px 10px;
+    padding: 18px 24px 8px;
   }
 
   .tryfit-result-content {
-    padding: 10px 32px 28px;
+    padding: 8px 24px 20px;
   }
 
   .tryfit-countdown-banner {
-    padding:   10px 24px;
-    font-size: 13px;
+    padding:   9px 20px;
+    font-size: 12px;
   }
 
-  .tryfit-result-product-title { font-size: 15px; }
+  .tryfit-result-product-title { font-size: 14px; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

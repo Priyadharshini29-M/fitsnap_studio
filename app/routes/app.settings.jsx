@@ -2,6 +2,7 @@ import PropTypes from "prop-types";
 import { useLoaderData, useFetcher } from "react-router";
 import PlanGate from "../components/PlanGate";
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { authenticate } from "../shopify.server";
 import phpApiClient from "../lib/php-api.server";
 import { ensureMerchant } from "../lib/merchant.server";
@@ -848,200 +849,156 @@ SelectField.propTypes = {
 function SearchableSelect({ label, value, onChange, options }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 0 });
-  const inputRef = useRef(null);
-  const dropRef = useRef(null);
+  const [rect, setRect] = useState(null);
+  const triggerRef = useRef(null);
+
+  // Recalculate position on open
+  const openDropdown = () => {
+    if (triggerRef.current) {
+      setRect(triggerRef.current.getBoundingClientRect());
+    }
+    setOpen(true);
+    setQuery("");
+  };
 
   // Close on outside click
   useEffect(() => {
+    if (!open) return;
     function handleOutside(e) {
-      if (
-        inputRef.current &&
-        !inputRef.current.closest("[data-lang-select]").contains(e.target) &&
-        dropRef.current &&
-        !dropRef.current.contains(e.target)
-      ) {
+      if (triggerRef.current && !triggerRef.current.closest("[data-lang-select]").contains(e.target)) {
         setOpen(false);
         setQuery("");
       }
     }
     document.addEventListener("mousedown", handleOutside);
     return () => document.removeEventListener("mousedown", handleOutside);
-  }, []);
-
-  const openDropdown = () => {
-    if (inputRef.current) {
-      const rect = inputRef.current.getBoundingClientRect();
-      setDropPos({
-        top: rect.bottom + window.scrollY + 4,
-        left: rect.left + window.scrollX,
-        width: rect.width,
-      });
-    }
-    setOpen(true);
-    setQuery("");
-  };
+  }, [open]);
 
   const selected = options.find((o) => o.value === value);
-
   const filtered = query
     ? options.filter(
         (o) =>
           o.label.toLowerCase().includes(query.toLowerCase()) ||
-          (o.nativeName &&
-            o.nativeName.toLowerCase().includes(query.toLowerCase())),
+          (o.nativeName && o.nativeName.toLowerCase().includes(query.toLowerCase())),
       )
     : options;
 
-  return (
-    <div className="space-y-1.5" data-lang-select="">
-      <label className="block text-sm font-bold text-gray-900">{label}</label>
+  const dropdown = open && rect && createPortal(
+    <div
+      style={{
+        position: "fixed",
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+        zIndex: 99999,
+        background: "#fff",
+        border: "1px solid #E5E7EB",
+        borderRadius: "12px",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
+        overflow: "hidden",
+      }}
+    >
+      {/* Search */}
+      <div style={{ padding: "8px", borderBottom: "1px solid #F3F4F6", background: "#F9FAFB" }}>
+        <div style={{ position: "relative" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth="2"
+            style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
+            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="text"
+            placeholder="Search languages…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{ width: "100%", paddingLeft: "32px", paddingRight: "12px", paddingTop: "8px", paddingBottom: "8px",
+              fontSize: "13px", border: "1px solid #E5E7EB", borderRadius: "8px", background: "#fff",
+              outline: "none", boxSizing: "border-box" }}
+          />
+        </div>
+      </div>
 
-      {/* Trigger button */}
+      {/* List */}
+      <div style={{ maxHeight: "260px", overflowY: "auto" }}>
+        {filtered.length > 0 ? filtered.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onChange(opt.value);
+              setOpen(false);
+              setQuery("");
+            }}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
+              width: "100%", textAlign: "left", padding: "10px 16px", fontSize: "13px", border: "none",
+              cursor: "pointer", background: value === opt.value ? "#EEF2FF" : "transparent",
+              color: value === opt.value ? "#3B5BDB" : "#374151",
+              fontWeight: value === opt.value ? 600 : 400,
+            }}
+          >
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {opt.label}
+            </span>
+            {opt.nativeName && opt.nativeName !== opt.label && (
+              <span style={{ fontSize: "11px", color: "#9CA3AF", flexShrink: 0 }}>{opt.nativeName}</span>
+            )}
+          </button>
+        )) : (
+          <div style={{ padding: "32px 16px", textAlign: "center", fontSize: "13px", color: "#9CA3AF" }}>
+            No languages match &quot;{query}&quot;
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{ padding: "8px 16px", borderTop: "1px solid #F3F4F6", background: "#F9FAFB",
+        display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: "11px", color: "#9CA3AF" }}>{filtered.length} of {options.length} languages</span>
+        {query && (
+          <button type="button" onMouseDown={(e) => { e.preventDefault(); setQuery(""); }}
+            style={{ fontSize: "11px", color: "#3B5BDB", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}>
+            Clear
+          </button>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+
+  return (
+    <div data-lang-select="">
+      <label style={{ display: "block", fontSize: "13px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+        {label}
+      </label>
       <button
-        ref={inputRef}
+        ref={triggerRef}
         type="button"
         onClick={openDropdown}
-        className="w-full flex items-center justify-between px-4 py-3 text-sm border border-gray-200 rounded-xl bg-white hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-900 transition-all text-left"
+        style={{
+          width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "10px 14px", fontSize: "13px", border: "1px solid #E5E7EB", borderRadius: "10px",
+          background: "#fff", cursor: "pointer", textAlign: "left",
+        }}
       >
         {selected ? (
-          <span className="flex items-center gap-2 min-w-0">
-            <span className="font-semibold text-gray-900 truncate">
+          <span style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+            <span style={{ fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {selected.label}
             </span>
             {selected.nativeName && selected.nativeName !== selected.label && (
-              <span className="text-xs text-gray-400 flex-shrink-0">
-                {selected.nativeName}
-              </span>
+              <span style={{ fontSize: "11px", color: "#9CA3AF", flexShrink: 0 }}>{selected.nativeName}</span>
             )}
           </span>
         ) : (
-          <span className="text-gray-400">Select a language…</span>
+          <span style={{ color: "#9CA3AF" }}>Select a language…</span>
         )}
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="#94A3B8"
-          strokeWidth="2.5"
-          className={`flex-shrink-0 ml-2 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-        >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5"
+          style={{ flexShrink: 0, marginLeft: "8px", transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
-
-      {/* Fixed-position dropdown — escapes overflow:hidden parents */}
-      {open && (
-        <div
-          ref={dropRef}
-          style={{
-            position: "fixed",
-            top: dropPos.top,
-            left: dropPos.left,
-            width: dropPos.width,
-            zIndex: 9999,
-          }}
-          className="bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden"
-        >
-          {/* Search input */}
-          <div className="p-2 border-b border-gray-100 bg-gray-50">
-            <div className="relative">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#9CA3AF"
-                strokeWidth="2"
-                className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-              >
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-              <input
-                type="text"
-                placeholder="Search languages…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-900 transition-all"
-              />
-            </div>
-          </div>
-
-          {/* Scrollable list */}
-          <div style={{ maxHeight: "260px", overflowY: "auto" }}>
-            {filtered.length > 0 ? (
-              filtered.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    onChange(opt.value);
-                    setOpen(false);
-                    setQuery("");
-                  }}
-                  className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between gap-3 transition-colors ${
-                    value === opt.value
-                      ? "bg-blue-50 text-blue-700"
-                      : "text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  <span
-                    className={`flex-1 min-w-0 ${value === opt.value ? "font-semibold" : ""}`}
-                  >
-                    {opt.label}
-                  </span>
-                  {opt.nativeName && opt.nativeName !== opt.label && (
-                    <span className="text-[11px] text-gray-400 flex-shrink-0">
-                      {opt.nativeName}
-                    </span>
-                  )}
-                  {value === opt.value && (
-                    <svg
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      className="flex-shrink-0 text-blue-600"
-                    >
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  )}
-                </button>
-              ))
-            ) : (
-              <div className="py-8 text-center">
-                <p className="text-sm text-gray-400">
-                  No languages match &quot;{query}&quot;
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Footer count */}
-          <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
-            <span className="text-[11px] text-gray-400">
-              {filtered.length} of {options.length} languages
-            </span>
-            {query && (
-              <button
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setQuery("");
-                }}
-                className="text-[11px] text-blue-600 font-medium hover:text-blue-700"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+      {dropdown}
     </div>
   );
 }

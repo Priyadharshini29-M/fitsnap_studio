@@ -18,9 +18,11 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>FitSnap — AI Virtual Try-On</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Let shoppers see how clothes look on them before they buy. Reduce
+          returns, increase conversions, and build buyer confidence with
+          AI-powered virtual fitting — directly on your Shopify product pages.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
@@ -36,16 +38,17 @@ export default function App() {
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>AI-powered try-on.</strong> Shoppers upload a photo and
+            instantly see the product on their body — no guesswork needed.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Zero-code setup.</strong> Add the FitSnap block to any
+            product page via the Shopify Theme Editor in under 2 minutes.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Built-in analytics.</strong> Track try-on sessions,
+            add-to-cart rate, conversions, and device breakdown from your
+            FitSnap dashboard.
           </li>
         </ul>
       </div>

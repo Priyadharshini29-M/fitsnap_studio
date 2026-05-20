@@ -3,9 +3,11 @@ import { SHOPIFY_API_SECRET, PHP_API_URL, PHP_API_SECRET } from "../lib/env.serv
 
 /**
  * Webhook handler for:
- *   - orders/create  → record conversion in PHP (order tracking)
- *   - orders/paid    → record conversion in PHP (revenue attribution)
- *   - app/uninstalled → deactivate merchant in PHP
+ *   - orders/paid          → record conversion in PHP (revenue attribution)
+ *   - app/uninstalled      → deactivate merchant in PHP
+ *   - customers/data_request → GDPR: forward data export request to PHP
+ *   - customers/redact     → GDPR: delete customer data in PHP
+ *   - shop/redact          → GDPR: delete all shop data in PHP
  */
 export const loader = () => new Response("Not Found", { status: 404 });
 
@@ -66,6 +68,34 @@ export const action = async ({ request }) => {
     }).catch(() => {
       console.warn("Could not deactivate merchant for shop:", shop);
     });
+  }
+
+  // ── GDPR mandatory webhooks ────────────────────────────────────────────────
+
+  if (topic === "customers/data_request") {
+    // Merchant is requesting export of a specific customer's data.
+    // Forward to PHP so it can locate and report any stored session data.
+    await phpFetch(phpBase, phpSecret, "/gdpr/customers/data_request", {
+      shop_domain:   shop,
+      customer:      payload.customer ?? null,
+      orders_requested: payload.orders_requested ?? [],
+    }).catch((err) => console.error("customers/data_request PHP call failed:", err));
+  }
+
+  if (topic === "customers/redact") {
+    // Merchant is requesting deletion of a specific customer's data.
+    await phpFetch(phpBase, phpSecret, "/gdpr/customers/redact", {
+      shop_domain: shop,
+      customer:    payload.customer ?? null,
+      orders_to_redact: payload.orders_to_redact ?? [],
+    }).catch((err) => console.error("customers/redact PHP call failed:", err));
+  }
+
+  if (topic === "shop/redact") {
+    // 48+ hours after app uninstall — delete all remaining shop data.
+    await phpFetch(phpBase, phpSecret, "/gdpr/shop/redact", {
+      shop_domain: shop,
+    }).catch((err) => console.error("shop/redact PHP call failed:", err));
   }
 
   return new Response("OK", { status: 200 });

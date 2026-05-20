@@ -1,6 +1,7 @@
 {%- assign app_enabled = shop.metafields.fitfyce.app_enabled | default: 'true' -%}
+{%- assign tryon_enabled = product.metafields.tryfit.tryon_enabled | default: 'false' -%}
 {%- assign variant_mappings_json = product.metafields.tryfit.variant_mappings | default: '{}' -%}
-{%- if app_enabled == 'true' and product.metafields.tryfit.tryon_enabled == 'true' -%}
+{%- if app_enabled == 'true' and tryon_enabled == 'true' -%}
 
   <div id="tryfit-btn-wrap" class="tryfit-btn-container tryfit-app-block" data-widget-id="fitfyce-{{ block.id }}">
     <button
@@ -34,8 +35,6 @@
         box-sizing: border-box;
         transition: opacity 0.2s;
         gap: 2px;
-        opacity: 0;
-        visibility: hidden;
       "
     >
       <span class="tryfit-btn-icon" style="display:none;align-items:center;justify-content:center;flex-shrink:0;" aria-hidden="true"></span>

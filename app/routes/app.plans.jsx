@@ -13,6 +13,9 @@ const PLAN_KEY_MAP = {
   pro:    "FitSnap Pro",
 };
 
+// Numeric rank for upgrade vs downgrade label
+const PLAN_RANK = { free: 0, growth: 1, pro: 2 };
+
 export async function loader({ request }) {
   const { session, admin } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
@@ -43,18 +46,61 @@ export async function loader({ request }) {
   const planRes = await api.checkPlanLimit();
   const planData = planRes.ok ? planRes.data : null;
 
+  const rawPlan = planData?.plan ?? "free";
   return {
-    currentPlan: planData?.plan  ?? "free",
+    currentPlan: rawPlan === "basic" ? "free" : rawPlan,
     usedTryons:  planData?.used  ?? 0,
     limitTryons: planData?.limit ?? 10,
   };
 }
 
 export async function action({ request }) {
-  const { billing } = await authenticate.admin(request);
+  const { admin, billing } = await authenticate.admin(request);
   const formData = await request.formData();
   const planName = formData.get("plan");
 
+  // ── Downgrade to free: cancel the active Shopify subscription ────────────
+  if (planName === "free") {
+    const gqlRes = await admin.graphql(`
+      #graphql
+      query GetActiveSubscriptions {
+        currentAppInstallation {
+          activeSubscriptions { id name status }
+        }
+      }
+    `);
+    const gqlData = await gqlRes.json();
+    const activeSubs =
+      gqlData.data?.currentAppInstallation?.activeSubscriptions ?? [];
+
+    for (const sub of activeSubs) {
+      if (sub.status === "ACTIVE") {
+        await admin.graphql(
+          `#graphql
+          mutation CancelSubscription($id: ID!) {
+            appSubscriptionCancel(id: $id) {
+              appSubscription { id status }
+              userErrors { field message }
+            }
+          }`,
+          { variables: { id: sub.id } }
+        );
+      }
+    }
+
+    // Sync plan change to PHP backend
+    try {
+      const { session: freeSession } = await authenticate.admin(request);
+      const freeApiKey = await ensureMerchant(freeSession);
+      await phpApiClient(freeApiKey, PHP_API_URL).updatePlan("free");
+    } catch {
+      // Non-blocking — plan will reconcile on next load
+    }
+
+    throw redirect("/app/plans");
+  }
+
+  // ── Upgrade or switch between paid plans ─────────────────────────────────
   const planKey = PLAN_KEY_MAP[planName];
   if (!planKey) return { error: "Invalid plan selected" };
 
@@ -287,7 +333,18 @@ function UsageMeter({ used, limit, plan }) {
 
 // ─── Plan card ────────────────────────────────────────────────────────────────
 
-function PlanCard({ config, isCurrent, isSubmitting }) {
+function PlanCard({ config, isCurrent, currentPlanKey, isSubmitting }) {
+  const currentRank = PLAN_RANK[currentPlanKey] ?? 0;
+  const thisRank    = PLAN_RANK[config.key]     ?? 0;
+  const isDowngrade = thisRank < currentRank;
+  const isUpgrade   = thisRank > currentRank;
+
+  let ctaLabel = config.buttonLabel;
+  if (!isCurrent) {
+    if (isDowngrade) ctaLabel = `Downgrade to ${config.name}`;
+    else if (isUpgrade) ctaLabel = `Upgrade to ${config.name}`;
+  }
+
   return (
     <div className={`vto-plan-card${config.featured ? " vto-plan-card--featured" : ""}`}>
       {/* Badge row */}
@@ -307,22 +364,13 @@ function PlanCard({ config, isCurrent, isSubmitting }) {
         <div style={{ display: "flex", alignItems: "baseline", gap: "4px" }}>
           <p className="vto-plan-price">{config.price}</p>
           {config.priceSub && (
-            <span
-              style={{ fontSize: "13px", color: "#6B7280", fontWeight: 400 }}
-            >
+            <span style={{ fontSize: "13px", color: "#6B7280", fontWeight: 400 }}>
               {config.priceSub}
             </span>
           )}
         </div>
         {config.extraRate && (
-          <p
-            style={{
-              fontSize: "11px",
-              color: "#9CA3AF",
-              marginTop: "4px",
-              fontWeight: 500,
-            }}
-          >
+          <p style={{ fontSize: "11px", color: "#9CA3AF", marginTop: "4px", fontWeight: 500 }}>
             {config.extraRate}
           </p>
         )}
@@ -345,17 +393,17 @@ function PlanCard({ config, isCurrent, isSubmitting }) {
       <div className="vto-plan-cta">
         {isCurrent ? (
           <button className="vto-plan-btn vto-plan-btn--outline" disabled>
-            {config.buttonLabel}
+            Current Plan
           </button>
         ) : (
           <Form method="post" style={{ width: "100%" }}>
             <input type="hidden" name="plan" value={config.key} />
             <button
               type="submit"
-              className={`vto-plan-btn vto-plan-btn--${config.buttonVariant}`}
-              disabled={isSubmitting || config.key === "free"}
+              className={`vto-plan-btn vto-plan-btn--${isDowngrade ? "secondary" : config.buttonVariant}`}
+              disabled={isSubmitting}
             >
-              {isSubmitting ? "Processing…" : config.buttonLabel}
+              {isSubmitting ? "Processing…" : ctaLabel}
             </button>
           </Form>
         )}
@@ -425,6 +473,7 @@ export default function Plans() {
               key={config.key}
               config={config}
               isCurrent={currentPlan === config.key}
+              currentPlanKey={currentPlan}
               isSubmitting={isSubmitting}
             />
           ))}

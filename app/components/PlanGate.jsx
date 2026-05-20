@@ -82,6 +82,10 @@ export default function PlanGate({
   children,
   mode = "replace",
 }) {
+  // Plan gates temporarily disabled — re-enable by removing this line
+  return children;
+
+  // eslint-disable-next-line no-unreachable
   if (planAtLeast(currentPlan, requiredPlan)) {
     return children;
   }

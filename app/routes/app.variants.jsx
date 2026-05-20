@@ -60,7 +60,8 @@ export async function loader({ request }) {
   const api = phpApiClient(apiKey, PHP_API_URL);
 
   const planRes = await api.checkPlanLimit();
-  const currentPlan = planRes.ok ? (planRes.data?.plan ?? "free") : "free";
+  const rawPlan = planRes.ok ? (planRes.data?.plan ?? "free") : "free";
+  const currentPlan = rawPlan === "basic" ? "free" : rawPlan;
 
   const syncRes  = await api.syncProduct({
     shopify_product_id:  productId,
@@ -311,13 +312,14 @@ export default function Variants() {
     );
   }
 
-  if (!planAtLeast(currentPlan, "growth")) {
-    return (
-      <Page title="Variant Mappings" backAction={{ url: "/app/products", content: "Products" }}>
-        <PlanGate currentPlan={currentPlan} requiredPlan="growth" featureName="Variant Image Mapping">{null}</PlanGate>
-      </Page>
-    );
-  }
+  // Plan gate temporarily disabled
+  // if (!planAtLeast(currentPlan, "growth")) {
+  //   return (
+  //     <Page title="Variant Mappings" backAction={{ url: "/app/products", content: "Products" }}>
+  //       <PlanGate currentPlan={currentPlan} requiredPlan="growth" featureName="Variant Image Mapping">{null}</PlanGate>
+  //     </Page>
+  //   );
+  // }
 
   const mappingsByVariant = {};
   for (const m of mappings) {

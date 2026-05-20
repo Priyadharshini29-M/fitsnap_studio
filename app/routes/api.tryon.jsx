@@ -48,20 +48,20 @@ export const action = async ({ request }) => {
   const phpBase   = (PHP_API_URL).replace(/\/$/, "");
   const phpSecret = PHP_API_SECRET;
 
-  // ── Check plan limit ──────────────────────────────────────────
-  const limitRes = await fetchPhp(phpBase, phpSecret, "GET", "/plan/limit", null, 10_000);
-  if (!limitRes.ok) {
-    return Response.json({ error: limitRes.error ?? "Plan check failed" }, { status: 503 });
-  }
-  if (!limitRes.data?.is_unlimited && limitRes.data?.remaining <= 0) {
-    return Response.json(
-      {
-        error: "Monthly try-on limit reached. Please upgrade your plan.",
-        upgrade_url: "https://apps.shopify.com/tryfit",
-      },
-      { status: 429 }
-    );
-  }
+  // ── Check plan limit (temporarily disabled) ──────────────────
+  // const limitRes = await fetchPhp(phpBase, phpSecret, "GET", "/plan/limit", null, 10_000);
+  // if (!limitRes.ok) {
+  //   return Response.json({ error: limitRes.error || "Plan check failed" }, { status: 503 });
+  // }
+  // if (!limitRes.data?.is_unlimited && limitRes.data?.remaining <= 0) {
+  //   return Response.json(
+  //     {
+  //       error: "Monthly try-on limit reached. Please upgrade your plan.",
+  //       upgrade_url: "https://apps.shopify.com/tryfit",
+  //     },
+  //     { status: 429 }
+  //   );
+  // }
 
   // ── Create session ────────────────────────────────────────────
   const sessRes = await fetchPhp(phpBase, phpSecret, "POST", "/session/create", {
@@ -89,25 +89,27 @@ export const action = async ({ request }) => {
   const tryOnRes = await fetchPhp(phpBase, phpSecret, "POST", "/tryon", tryOnPayload, 90_000);
 
   if (!tryOnRes.ok || !tryOnRes.data?.result_image) {
+    const errMsg = tryOnRes.timedOut
+      ? "Try-on timed out. Please try again."
+      : tryOnRes.error || "Try-on failed. Please try again.";
+
     // Update session as failed
     if (sessionId) {
       await fetchPhp(phpBase, phpSecret, "POST", "/session/update", {
         session_id: sessionId,
         status: "failed",
-        error_message: tryOnRes.error ?? "Try-on failed",
+        error_message: errMsg,
       }, 5_000).catch(() => {});
     }
 
+    console.error("[api.tryon] try-on failed:", {
+      timedOut: tryOnRes.timedOut,
+      error: tryOnRes.error,
+      httpStatus: tryOnRes.httpStatus,
+    });
+
     const status = tryOnRes.timedOut ? 504 : 500;
-    return Response.json(
-      {
-        error: tryOnRes.timedOut
-          ? "Try-on timed out. Please try again."
-          : tryOnRes.error ?? "Try-on failed",
-        session_id: sessionId,
-      },
-      { status }
-    );
+    return Response.json({ error: errMsg, session_id: sessionId }, { status });
   }
 
   const resultImage = tryOnRes.data.result_image;
@@ -159,7 +161,7 @@ async function fetchPhp(base, apiKey, method, path, body, timeoutMs) {
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      return { ok: false, error: data.error ?? `HTTP ${res.status}`, data: null };
+      return { ok: false, error: data.error || `HTTP ${res.status}`, httpStatus: res.status, data: null };
     }
     return { ok: true, data };
   } catch (err) {
