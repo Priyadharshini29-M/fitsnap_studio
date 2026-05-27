@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect } from "react";
-import { useLoaderData, useSubmit, useNavigate, useNavigation, useActionData } from "react-router";
-import { Page, Text, Button, Icon, Banner } from "@shopify/polaris";
+import {
+  useLoaderData,
+  useSubmit,
+  useNavigate,
+  useNavigation,
+} from "react-router";
+import { Page, Text, Button, Icon } from "@shopify/polaris";
 import {
   SearchIcon,
   ProductIcon,
@@ -85,14 +90,16 @@ export async function loader({ request }) {
     phpMap[String(p.shopify_product_id)] = p;
   }
 
-  const rawCollections = (collectionsData.data?.collections?.edges ?? []).map(e => e.node);
+  const rawCollections = (collectionsData.data?.collections?.edges ?? []).map(
+    (e) => e.node,
+  );
 
   const collections = rawCollections
-    .map(col => {
+    .map((col) => {
       const activeProducts = (col.products?.edges ?? [])
-        .map(e => e.node)
-        .filter(p => p.status === "ACTIVE")
-        .map(p => {
+        .map((e) => e.node)
+        .filter((p) => p.status === "ACTIVE")
+        .map((p) => {
           const numericId = p.id.replace("gid://shopify/Product/", "");
           const phpRow = phpMap[numericId] ?? null;
           const minAmt = p.priceRange?.minVariantPrice?.amount ?? null;
@@ -102,8 +109,8 @@ export async function loader({ request }) {
             minAmt === null
               ? null
               : minAmt === maxAmt || maxAmt === null
-              ? minAmt
-              : `${minAmt} – ${maxAmt}`;
+                ? minAmt
+                : `${minAmt} – ${maxAmt}`;
           return {
             id: p.id,
             title: p.title,
@@ -130,7 +137,7 @@ export async function loader({ request }) {
         productCount: activeProducts.length,
       };
     })
-    .filter(col => col.productCount > 0);
+    .filter((col) => col.productCount > 0);
 
   const allProductIds = new Set();
   let tryonEnabledCount = 0;
@@ -159,69 +166,50 @@ export async function action({ request }) {
   const intent = formData.get("intent");
   const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
-  function safeJsonParse(raw, fallback = null) {
-    if (!raw) return fallback;
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return fallback;
-    }
-  }
-
   if (intent === "toggle_product") {
-    const shopifyProductId  = formData.get("shopify_product_id");
+    const shopifyProductId = formData.get("shopify_product_id");
     const shopifyProductGid = formData.get("shopify_product_gid");
-    const enabled           = formData.get("enabled") === "true";
-    const title             = formData.get("title")        || null;
-    const handle            = formData.get("handle")       || null;
-    const vendor            = formData.get("vendor")       || null;
-    const productType       = formData.get("product_type") || null;
-    const featuredImage     = formData.get("featured_image") || null;
-    const price             = formData.get("price")        || null;
-    const currency          = formData.get("currency")     || null;
-    const collectionId      = formData.get("collection_id")     || null;
-    const collectionTitle   = formData.get("collection_title")  || null;
-    const collectionHandle  = formData.get("collection_handle") || null;
+    const enabled = formData.get("enabled") === "true";
+    const productHandle = formData.get("handle") || null;
+    const collectionId = formData.get("collection_id") || null;
+    const collectionTitle = formData.get("collection_title") || null;
+    const collectionHandle = formData.get("collection_handle") || null;
     const collectionProductsRaw = formData.get("collection_products");
-    const collectionProducts   = safeJsonParse(collectionProductsRaw, null);
+    const collectionProducts = collectionProductsRaw
+      ? JSON.parse(collectionProductsRaw)
+      : null;
 
     // Fetch variants for this product directly (kept out of page-load query to reduce cost)
-    const varRes = await admin.graphql(PRODUCT_VARIANTS_QUERY, { variables: { id: shopifyProductGid } });
-    const varData = await varRes.json();
-    const shopifyVariants = (varData.data?.product?.variants?.edges ?? []).map(e => ({
-      id:                  e.node.id,
-      shopify_variant_id:  e.node.id.replace("gid://shopify/ProductVariant/", ""),
-      title:               e.node.title,
-      price:               e.node.price,
-      sku:                 e.node.sku ?? null,
-      image_url:           e.node.image?.url ?? null,
-      options:             e.node.selectedOptions ?? [],
-    }));
-
-    const syncRes = await api.syncProduct({
-      shopify_product_id:  shopifyProductId,
-      shopify_product_gid: shopifyProductGid,
-      title,
-      handle,
-      vendor,
-      product_type:        productType,
-      featured_image:      featuredImage,
-      price,
-      currency,
-      collection_id:       collectionId,
-      collection_title:    collectionTitle,
-      collection_handle:   collectionHandle,
-      collection_products: collectionProducts,
-      shopify_variants:    shopifyVariants,
-      is_tryon_enabled:    enabled ? 1 : 0,
+    const varRes = await admin.graphql(PRODUCT_VARIANTS_QUERY, {
+      variables: { id: shopifyProductGid },
     });
+    const varData = await varRes.json();
+    const shopifyVariants = (varData.data?.product?.variants?.edges ?? []).map(
+      (e) => ({
+        id: e.node.id,
+        shopify_variant_id: e.node.id.replace(
+          "gid://shopify/ProductVariant/",
+          "",
+        ),
+        title: e.node.title,
+        price: e.node.price,
+        sku: e.node.sku ?? null,
+        image_url: e.node.image?.url ?? null,
+        options: e.node.selectedOptions ?? [],
+      }),
+    );
 
-    if (!syncRes.ok) {
-      return new Response(
-        JSON.stringify({ ok: false, error: syncRes.error || "Failed to sync product state" }),
-        { status: 502, headers: { "Content-Type": "application/json" } }
-      );
-    }
+    await api.syncProduct({
+      shopify_product_id: shopifyProductId,
+      shopify_product_gid: shopifyProductGid,
+      handle: productHandle,
+      collection_id: collectionId,
+      collection_title: collectionTitle,
+      collection_handle: collectionHandle,
+      collection_products: collectionProducts,
+      shopify_variants: shopifyVariants,
+      is_tryon_enabled: enabled ? 1 : 0,
+    });
 
     const metafieldRes = await admin.graphql(
       `#graphql
@@ -236,23 +224,28 @@ export async function action({ request }) {
         variables: {
           input: {
             id: shopifyProductGid,
-            metafields: [{
-              namespace: "tryfit",
-              key: "tryon_enabled",
-              value: enabled ? "true" : "false",
-              type: "single_line_text_field",
-            }],
+            metafields: [
+              {
+                namespace: "tryfit",
+                key: "tryon_enabled",
+                value: enabled ? "true" : "false",
+                type: "single_line_text_field",
+              },
+            ],
           },
         },
-      }
+      },
     );
 
     const metafieldData = await metafieldRes.json();
     const metafieldErrors = metafieldData.data?.productUpdate?.userErrors ?? [];
     if (metafieldErrors.length > 0) {
       return new Response(
-        JSON.stringify({ ok: false, error: `Metafield update failed: ${metafieldErrors[0].message}` }),
-        { status: 502, headers: { "Content-Type": "application/json" } }
+        JSON.stringify({
+          ok: false,
+          error: `Metafield update failed: ${metafieldErrors[0].message}`,
+        }),
+        { status: 502, headers: { "Content-Type": "application/json" } },
       );
     }
 
@@ -263,7 +256,7 @@ export async function action({ request }) {
     const collectionGid = formData.get("collection_gid");
     const enabled = formData.get("enabled") === "true";
     const productsJson = formData.get("products_json");
-    const products = safeJsonParse(productsJson, []);
+    const products = productsJson ? JSON.parse(productsJson) : [];
 
     // Update collection metafield
     await admin.graphql(
@@ -276,87 +269,68 @@ export async function action({ request }) {
         variables: {
           input: {
             id: collectionGid,
-            metafields: [{
-              namespace: "tryfit",
-              key: "tryon_enabled",
-              value: enabled ? "true" : "false",
-              type: "single_line_text_field",
-            }],
+            metafields: [
+              {
+                namespace: "tryfit",
+                key: "tryon_enabled",
+                value: enabled ? "true" : "false",
+                type: "single_line_text_field",
+              },
+            ],
           },
         },
-      }
+      },
     );
 
     // Bulk-update every product in the collection (PHP + Shopify metafield in parallel)
-    const collectionId     = formData.get("collection_id")     || null;
-    const collectionTitle  = formData.get("collection_title")  || null;
+    const collectionId = formData.get("collection_id") || null;
+    const collectionTitle = formData.get("collection_title") || null;
     const collectionHandle = formData.get("collection_handle") || null;
 
     const collectionProductsRaw = formData.get("collection_products");
-    const collectionProducts    = safeJsonParse(collectionProductsRaw, null);
+    const collectionProducts = collectionProductsRaw
+      ? JSON.parse(collectionProductsRaw)
+      : null;
 
-    const bulkResults = await Promise.allSettled(
-      products.map(async p => {
-        const syncRes = await api.syncProduct({
-          shopify_product_id:  p.numericId,
-          shopify_product_gid: p.id,
-          title:               p.title ?? null,
-          handle:              p.handle ?? null,
-          vendor:              p.vendor ?? null,
-          product_type:        p.productType ?? null,
-          featured_image:      p.featuredImage ?? null,
-          price:               p.price ?? null,
-          currency:            p.currency ?? null,
-          collection_id:       collectionId,
-          collection_title:    collectionTitle,
-          collection_handle:   collectionHandle,
-          collection_products: collectionProducts,
-          shopify_variants:    null,
-          is_tryon_enabled:    enabled ? 1 : 0,
-        });
-
-        if (!syncRes.ok) {
-          throw new Error(syncRes.error || `Failed syncing product ${p.numericId}`);
-        }
-
-        const bulkMetafieldRes = await admin.graphql(
-          `#graphql
-            mutation SetProductTryonMetafield($input: ProductInput!) {
-              productUpdate(input: $input) {
-                product { id }
-                userErrors { field message }
+    await Promise.allSettled(
+      products.map((p) =>
+        Promise.allSettled([
+          api.syncProduct({
+            shopify_product_id: p.numericId,
+            shopify_product_gid: p.id,
+            handle: p.handle || null,
+            collection_id: collectionId,
+            collection_title: collectionTitle,
+            collection_handle: collectionHandle,
+            collection_products: collectionProducts,
+            shopify_variants: null,
+            is_tryon_enabled: enabled ? 1 : 0,
+          }),
+          admin.graphql(
+            `#graphql
+              mutation SetProductTryonMetafield($input: ProductInput!) {
+                productUpdate(input: $input) { product { id } }
               }
-            }
-          `,
-          {
-            variables: {
-              input: {
-                id: p.id,
-                metafields: [{
-                  namespace: "tryfit",
-                  key: "tryon_enabled",
-                  value: enabled ? "true" : "false",
-                  type: "single_line_text_field",
-                }],
+            `,
+            {
+              variables: {
+                input: {
+                  id: p.id,
+                  metafields: [
+                    {
+                      namespace: "tryfit",
+                      key: "tryon_enabled",
+                      value: enabled ? "true" : "false",
+                      type: "single_line_text_field",
+                    },
+                  ],
+                },
               },
             },
-          }
-        );
-        const bulkMetafieldData = await bulkMetafieldRes.json();
-        const bulkMetafieldErrors = bulkMetafieldData.data?.productUpdate?.userErrors ?? [];
-        if (bulkMetafieldErrors.length > 0) {
-          throw new Error(`Metafield update failed for ${p.numericId}: ${bulkMetafieldErrors[0].message}`);
-        }
-      })
+          ),
+        ]),
+      ),
     );
-
-    const failed = bulkResults.find(r => r.status === "rejected");
-    if (failed) {
-      return new Response(
-        JSON.stringify({ ok: false, error: failed.reason?.message || "Failed to sync collection products" }),
-        { status: 502, headers: { "Content-Type": "application/json" } }
-      );
-    }
 
     return { ok: true };
   }
@@ -373,7 +347,7 @@ export async function action({ request }) {
           }
         }
       `,
-      { variables: { id: collectionGid } }
+      { variables: { id: collectionGid } },
     );
 
     return { ok: true };
@@ -391,7 +365,7 @@ const CustomToggle = ({ checked, onChange, disabled }) => (
       width: "44px",
       height: "24px",
       borderRadius: "12px",
-      background: checked ? "var(--vto-primary)" : "#E2E8F0",
+      background: checked ? "var(--vto-primary)" : "#E2E8zF0",
       position: "relative",
       cursor: disabled ? "not-allowed" : "pointer",
       transition: "background 0.3s ease",
@@ -399,17 +373,19 @@ const CustomToggle = ({ checked, onChange, disabled }) => (
       flexShrink: 0,
     }}
   >
-    <div style={{
-      width: "18px",
-      height: "18px",
-      borderRadius: "50%",
-      background: "white",
-      position: "absolute",
-      top: "3px",
-      left: checked ? "23px" : "3px",
-      transition: "left 0.3s ease",
-      boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-    }} />
+    <div
+      style={{
+        width: "18px",
+        height: "18px",
+        borderRadius: "50%",
+        background: "white",
+        position: "absolute",
+        top: "3px",
+        left: checked ? "23px" : "3px",
+        transition: "left 0.3s ease",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+      }}
+    />
   </div>
 );
 
@@ -444,7 +420,10 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
   }
 
   function handleEdit() {
-    window.open(`https://${shop}/admin/collections/${collection.numericId}`, "_blank");
+    window.open(
+      `https://${shop}/admin/collections/${collection.numericId}`,
+      "_blank",
+    );
     onClose();
   }
 
@@ -468,23 +447,58 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
 
   if (confirmDelete) {
     return (
-      <div ref={ref} style={{ ...baseDropdownStyle, border: "1px solid #FCA5A5", padding: "16px", width: "220px" }}>
-        <div style={{ fontSize: "13px", fontWeight: "600", color: "#1E293B", marginBottom: "4px" }}>
+      <div
+        ref={ref}
+        style={{
+          ...baseDropdownStyle,
+          border: "1px solid #FCA5A5",
+          padding: "16px",
+          width: "220px",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "13px",
+            fontWeight: "600",
+            color: "#1E293B",
+            marginBottom: "4px",
+          }}
+        >
           Delete &ldquo;{collection.title}&rdquo;?
         </div>
-        <div style={{ fontSize: "12px", color: "#64748B", marginBottom: "12px" }}>
+        <div
+          style={{ fontSize: "12px", color: "#64748B", marginBottom: "12px" }}
+        >
           Products will not be deleted.
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button
             onClick={() => setConfirmDelete(false)}
-            style={{ flex: 1, padding: "7px", borderRadius: "6px", border: "1px solid var(--vto-border)", background: "white", cursor: "pointer", fontSize: "13px" }}
+            style={{
+              flex: 1,
+              padding: "7px",
+              borderRadius: "6px",
+              border: "1px solid var(--vto-border)",
+              background: "white",
+              cursor: "pointer",
+              fontSize: "13px",
+            }}
           >
             Cancel
           </button>
           <button
             onClick={handleDeleteConfirm}
-            style={{ flex: 1, padding: "7px", borderRadius: "6px", border: "none", background: "#EF4444", color: "white", cursor: "pointer", fontSize: "13px", fontWeight: "600" }}
+            style={{
+              flex: 1,
+              padding: "7px",
+              borderRadius: "6px",
+              border: "none",
+              background: "#EF4444",
+              color: "white",
+              cursor: "pointer",
+              fontSize: "13px",
+              fontWeight: "600",
+            }}
           >
             Delete
           </button>
@@ -494,28 +508,42 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
   }
 
   return (
-    <div ref={ref} style={{ ...baseDropdownStyle, border: "1px solid var(--vto-border)", minWidth: "175px", overflow: "hidden" }}>
+    <div
+      ref={ref}
+      style={{
+        ...baseDropdownStyle,
+        border: "1px solid var(--vto-border)",
+        minWidth: "175px",
+        overflow: "hidden",
+      }}
+    >
       <button
         style={menuItemStyle}
-        onMouseEnter={e => (e.currentTarget.style.background = "#F8FAFC")}
-        onMouseLeave={e => (e.currentTarget.style.background = "none")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "#F8FAFC")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
         onClick={handleView}
       >
         View on store
       </button>
       <button
         style={menuItemStyle}
-        onMouseEnter={e => (e.currentTarget.style.background = "#F8FAFC")}
-        onMouseLeave={e => (e.currentTarget.style.background = "none")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "#F8FAFC")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
         onClick={handleEdit}
       >
         Edit in admin
       </button>
-      <div style={{ height: "1px", background: "var(--vto-border)", margin: "4px 0" }} />
+      <div
+        style={{
+          height: "1px",
+          background: "var(--vto-border)",
+          margin: "4px 0",
+        }}
+      />
       <button
         style={{ ...menuItemStyle, color: "#EF4444" }}
-        onMouseEnter={e => (e.currentTarget.style.background = "#FFF5F5")}
-        onMouseLeave={e => (e.currentTarget.style.background = "none")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "#FFF5F5")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
         onClick={() => setConfirmDelete(true)}
       >
         Delete collection
@@ -524,24 +552,34 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
   );
 }
 
-function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openDropdown, setOpenDropdown }) {
+function CollectionRow({
+  collection,
+  shop,
+  submit,
+  isSubmitting,
+  navigate,
+  openDropdown,
+  setOpenDropdown,
+}) {
   const [expanded, setExpanded] = useState(false);
   const isDropdownOpen = openDropdown === collection.id;
-  const enabledCount = collection.products.filter(p => p.isTryonEnabled).length;
+  const enabledCount = collection.products.filter(
+    (p) => p.isTryonEnabled,
+  ).length;
 
   const collectionProductsPayload = JSON.stringify(
-    collection.products.map(p => ({
-      shopify_product_id:  p.numericId,
+    collection.products.map((p) => ({
+      shopify_product_id: p.numericId,
       shopify_product_gid: p.id,
-      title:               p.title,
-      handle:              p.handle,
-      vendor:              p.vendor        ?? null,
-      product_type:        p.productType   ?? null,
-      featured_image:      p.featuredImage?.url ?? null,
-      price:               p.price         ?? null,
-      currency:            p.currency      ?? null,
-      is_tryon_enabled:    p.isTryonEnabled ? 1 : 0,
-    }))
+      title: p.title,
+      handle: p.handle,
+      vendor: p.vendor ?? null,
+      product_type: p.productType ?? null,
+      featured_image: p.featuredImage?.url ?? null,
+      price: p.price ?? null,
+      currency: p.currency ?? null,
+      is_tryon_enabled: p.isTryonEnabled ? 1 : 0,
+    })),
   );
 
   function handleToggleCollection() {
@@ -553,19 +591,12 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
     fd.set("collection_handle", collection.handle);
     fd.set("collection_products", collectionProductsPayload);
     fd.set("enabled", String(!collection.isTryonEnabled));
-    fd.set("products_json", JSON.stringify(
-      collection.products.map(p => ({
-        id: p.id,
-        numericId: p.numericId,
-        title: p.title,
-        handle: p.handle,
-        vendor: p.vendor,
-        productType: p.productType,
-        featuredImage: p.featuredImage?.url ?? null,
-        price: p.price,
-        currency: p.currency,
-      }))
-    ));
+    fd.set(
+      "products_json",
+      JSON.stringify(
+        collection.products.map((p) => ({ id: p.id, numericId: p.numericId, handle: p.handle })),
+      ),
+    );
     submit(fd, { method: "post" });
   }
 
@@ -574,13 +605,7 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
     fd.set("intent", "toggle_product");
     fd.set("shopify_product_id", product.numericId);
     fd.set("shopify_product_gid", product.id);
-    fd.set("title", product.title);
     fd.set("handle", product.handle);
-    fd.set("vendor", product.vendor ?? "");
-    fd.set("product_type", product.productType ?? "");
-    fd.set("featured_image", product.featuredImage?.url ?? "");
-    fd.set("price", product.price ?? "");
-    fd.set("currency", product.currency ?? "");
     fd.set("collection_id", collection.numericId);
     fd.set("collection_title", collection.title);
     fd.set("collection_handle", collection.handle);
@@ -613,7 +638,14 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
                 transition: "all 0.2s",
               }}
             >
-              <span style={{ display: "inline-block", transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.2s", lineHeight: 1 }}>
+              <span
+                style={{
+                  display: "inline-block",
+                  transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+                  transition: "transform 0.2s",
+                  lineHeight: 1,
+                }}
+              >
                 <Icon source={ChevronRightIcon} />
               </span>
             </button>
@@ -622,31 +654,82 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
               <img
                 src={collection.image.url}
                 alt={collection.image.altText ?? collection.title}
-                style={{ width: "44px", height: "44px", borderRadius: "8px", objectFit: "cover", flexShrink: 0, border: "1px solid var(--vto-border)" }}
+                style={{
+                  width: "44px",
+                  height: "44px",
+                  borderRadius: "8px",
+                  objectFit: "cover",
+                  flexShrink: 0,
+                  border: "1px solid var(--vto-border)",
+                }}
               />
             ) : (
-              <div style={{ width: "44px", height: "44px", borderRadius: "8px", background: "var(--vto-primary-light)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--vto-primary)", flexShrink: 0 }}>
+              <div
+                style={{
+                  width: "44px",
+                  height: "44px",
+                  borderRadius: "8px",
+                  background: "var(--vto-primary-light)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "var(--vto-primary)",
+                  flexShrink: 0,
+                }}
+              >
                 <Icon source={ProductIcon} />
               </div>
             )}
 
             <div>
-              <div style={{ fontWeight: "600", color: "#1E293B", fontSize: "14px" }}>{collection.title}</div>
-              <div style={{ fontSize: "12px", color: "#94A3B8", marginTop: "2px" }}>/{collection.handle}</div>
+              <div
+                style={{
+                  fontWeight: "600",
+                  color: "#1E293B",
+                  fontSize: "14px",
+                }}
+              >
+                {collection.title}
+              </div>
+              <div
+                style={{ fontSize: "12px", color: "#94A3B8", marginTop: "2px" }}
+              >
+                /{collection.handle}
+              </div>
             </div>
           </div>
         </td>
 
         {/* Product count */}
         <td>
-          <span style={{ fontWeight: "600", fontSize: "15px", color: "#1E293B" }}>{collection.productCount}</span>
-          <span style={{ fontSize: "12px", color: "#64748B", marginLeft: "4px" }}>products</span>
+          <span
+            style={{ fontWeight: "600", fontSize: "15px", color: "#1E293B" }}
+          >
+            {collection.productCount}
+          </span>
+          <span
+            style={{ fontSize: "12px", color: "#64748B", marginLeft: "4px" }}
+          >
+            products
+          </span>
         </td>
 
         {/* Try-on enabled count */}
         <td>
-          <span style={{ fontWeight: "600", fontSize: "15px", color: enabledCount > 0 ? "#10B981" : "#64748B" }}>{enabledCount}</span>
-          <span style={{ fontSize: "12px", color: "#64748B", marginLeft: "4px" }}>enabled</span>
+          <span
+            style={{
+              fontWeight: "600",
+              fontSize: "15px",
+              color: enabledCount > 0 ? "#10B981" : "#64748B",
+            }}
+          >
+            {enabledCount}
+          </span>
+          <span
+            style={{ fontSize: "12px", color: "#64748B", marginLeft: "4px" }}
+          >
+            enabled
+          </span>
         </td>
 
         {/* Try-on toggle */}
@@ -662,7 +745,9 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
         <td>
           <div style={{ position: "relative", display: "inline-block" }}>
             <button
-              onClick={() => setOpenDropdown(isDropdownOpen ? null : collection.id)}
+              onClick={() =>
+                setOpenDropdown(isDropdownOpen ? null : collection.id)
+              }
               style={{
                 width: "32px",
                 height: "32px",
@@ -694,20 +779,70 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
       {expanded && (
         <tr>
           <td colSpan={5} style={{ padding: 0 }}>
-            <div style={{ borderTop: "2px solid var(--vto-primary-light)", background: "#F8FAFC" }}>
+            <div
+              style={{
+                borderTop: "2px solid var(--vto-primary-light)",
+                background: "#F8FAFC",
+              }}
+            >
               {/* Header */}
-              <div style={{ padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--vto-border)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "11px", fontWeight: "700", color: "var(--vto-primary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              <div
+                style={{
+                  padding: "10px 20px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  borderBottom: "1px solid var(--vto-border)",
+                }}
+              >
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      color: "var(--vto-primary)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.05em",
+                    }}
+                  >
                     Products in {collection.title}
                   </span>
-                  <span style={{ background: "var(--vto-primary-light)", color: "var(--vto-primary)", fontSize: "11px", fontWeight: "700", padding: "1px 8px", borderRadius: "10px" }}>
+                  <span
+                    style={{
+                      background: "var(--vto-primary-light)",
+                      color: "var(--vto-primary)",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      padding: "1px 8px",
+                      borderRadius: "10px",
+                    }}
+                  >
                     {collection.productCount}
                   </span>
                 </div>
                 {isSubmitting && (
-                  <span style={{ fontSize: "11px", color: "#F97316", fontWeight: "600", display: "flex", alignItems: "center", gap: "5px" }}>
-                    <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#F97316", display: "inline-block", animation: "pulse 1s infinite" }} />
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: "#F97316",
+                      fontWeight: "600",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "5px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: "6px",
+                        height: "6px",
+                        borderRadius: "50%",
+                        background: "#F97316",
+                        display: "inline-block",
+                        animation: "pulse 1s infinite",
+                      }}
+                    />
                     Updating…
                   </span>
                 )}
@@ -722,42 +857,175 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "#F1F5F9" }}>
-                    <th style={{ padding: "8px 20px", textAlign: "left", fontSize: "11px", color: "#64748B", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.04em" }}>Product</th>
-                    <th style={{ padding: "8px 16px", textAlign: "left", fontSize: "11px", color: "#64748B", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.04em" }}>Vendor / Type</th>
-                    <th style={{ padding: "8px 16px", textAlign: "left", fontSize: "11px", color: "#64748B", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.04em" }}>Preview</th>
-                    <th style={{ padding: "8px 16px", textAlign: "left", fontSize: "11px", color: "#64748B", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.04em" }}>Try-On</th>
-                    <th style={{ padding: "8px 16px", textAlign: "left", fontSize: "11px", color: "#64748B", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.04em" }}>Action</th>
+                    <th
+                      style={{
+                        padding: "8px 20px",
+                        textAlign: "left",
+                        fontSize: "11px",
+                        color: "#64748B",
+                        fontWeight: "700",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                      }}
+                    >
+                      Product
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 16px",
+                        textAlign: "left",
+                        fontSize: "11px",
+                        color: "#64748B",
+                        fontWeight: "700",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                      }}
+                    >
+                      Vendor / Type
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 16px",
+                        textAlign: "left",
+                        fontSize: "11px",
+                        color: "#64748B",
+                        fontWeight: "700",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                      }}
+                    >
+                      Preview
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 16px",
+                        textAlign: "left",
+                        fontSize: "11px",
+                        color: "#64748B",
+                        fontWeight: "700",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                      }}
+                    >
+                      Try-On
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 16px",
+                        textAlign: "left",
+                        fontSize: "11px",
+                        color: "#64748B",
+                        fontWeight: "700",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                      }}
+                    >
+                      Action
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {collection.products.map((product, i) => (
-                    <tr key={product.id} style={{ borderTop: "1px solid var(--vto-border)", background: i % 2 === 0 ? "white" : "#FAFBFC" }}>
+                    <tr
+                      key={product.id}
+                      style={{
+                        borderTop: "1px solid var(--vto-border)",
+                        background: i % 2 === 0 ? "white" : "#FAFBFC",
+                      }}
+                    >
                       {/* Product */}
                       <td style={{ padding: "12px 20px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "12px",
+                          }}
+                        >
                           {product.featuredImage ? (
                             <img
                               src={product.featuredImage.url}
-                              alt={product.featuredImage.altText ?? product.title}
-                              style={{ width: "44px", height: "44px", borderRadius: "6px", objectFit: "cover", flexShrink: 0, border: "1px solid var(--vto-border)" }}
+                              alt={
+                                product.featuredImage.altText ?? product.title
+                              }
+                              style={{
+                                width: "44px",
+                                height: "44px",
+                                borderRadius: "6px",
+                                objectFit: "cover",
+                                flexShrink: 0,
+                                border: "1px solid var(--vto-border)",
+                              }}
                             />
                           ) : (
-                            <div style={{ width: "44px", height: "44px", borderRadius: "6px", background: "#E2E8F0", display: "flex", alignItems: "center", justifyContent: "center", color: "#94A3B8", flexShrink: 0 }}>
+                            <div
+                              style={{
+                                width: "44px",
+                                height: "44px",
+                                borderRadius: "6px",
+                                background: "#E2E8F0",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: "#94A3B8",
+                                flexShrink: 0,
+                              }}
+                            >
                               <Icon source={ProductIcon} />
                             </div>
                           )}
                           <div>
-                            <div style={{ fontWeight: "600", fontSize: "13px", color: "#1E293B" }}>{product.title}</div>
-                            <div style={{ fontSize: "11px", color: "#94A3B8", marginTop: "2px" }}>/{product.handle}</div>
+                            <div
+                              style={{
+                                fontWeight: "600",
+                                fontSize: "13px",
+                                color: "#1E293B",
+                              }}
+                            >
+                              {product.title}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "11px",
+                                color: "#94A3B8",
+                                marginTop: "2px",
+                              }}
+                            >
+                              /{product.handle}
+                            </div>
                             {product.tags.length > 0 && (
-                              <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "4px" }}>
-                                {product.tags.slice(0, 3).map(tag => (
-                                  <span key={tag} style={{ fontSize: "10px", padding: "1px 6px", borderRadius: "4px", background: "#F1F5F9", color: "#64748B", fontWeight: "500" }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "4px",
+                                  flexWrap: "wrap",
+                                  marginTop: "4px",
+                                }}
+                              >
+                                {product.tags.slice(0, 3).map((tag) => (
+                                  <span
+                                    key={tag}
+                                    style={{
+                                      fontSize: "10px",
+                                      padding: "1px 6px",
+                                      borderRadius: "4px",
+                                      background: "#F1F5F9",
+                                      color: "#64748B",
+                                      fontWeight: "500",
+                                    }}
+                                  >
                                     {tag}
                                   </span>
                                 ))}
                                 {product.tags.length > 3 && (
-                                  <span style={{ fontSize: "10px", color: "#94A3B8" }}>+{product.tags.length - 3}</span>
+                                  <span
+                                    style={{
+                                      fontSize: "10px",
+                                      color: "#94A3B8",
+                                    }}
+                                  >
+                                    +{product.tags.length - 3}
+                                  </span>
                                 )}
                               </div>
                             )}
@@ -767,19 +1035,42 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
                       {/* Vendor / Type */}
                       <td style={{ padding: "12px 16px" }}>
                         {product.vendor ? (
-                          <div style={{ fontSize: "13px", fontWeight: "500", color: "#1E293B" }}>{product.vendor}</div>
+                          <div
+                            style={{
+                              fontSize: "13px",
+                              fontWeight: "500",
+                              color: "#1E293B",
+                            }}
+                          >
+                            {product.vendor}
+                          </div>
                         ) : null}
                         {product.productType ? (
-                          <div style={{ fontSize: "11px", color: "#64748B", marginTop: product.vendor ? "2px" : 0 }}>{product.productType}</div>
+                          <div
+                            style={{
+                              fontSize: "11px",
+                              color: "#64748B",
+                              marginTop: product.vendor ? "2px" : 0,
+                            }}
+                          >
+                            {product.productType}
+                          </div>
                         ) : null}
                         {!product.vendor && !product.productType && (
-                          <span style={{ fontSize: "13px", color: "#CBD5E1" }}>—</span>
+                          <span style={{ fontSize: "13px", color: "#CBD5E1" }}>
+                            —
+                          </span>
                         )}
                       </td>
                       {/* Preview */}
                       <td style={{ padding: "12px 16px" }}>
                         <button
-                          onClick={() => window.open(`https://${shop}/products/${product.handle}`, "_blank")}
+                          onClick={() =>
+                            window.open(
+                              `https://${shop}/products/${product.handle}`,
+                              "_blank",
+                            )
+                          }
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
@@ -795,25 +1086,60 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
                             transition: "all 0.15s",
                             whiteSpace: "nowrap",
                           }}
-                          onMouseEnter={e => { e.currentTarget.style.background = "var(--vto-primary-light)"; e.currentTarget.style.borderColor = "var(--vto-primary)"; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = "white"; e.currentTarget.style.borderColor = "var(--vto-border)"; }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background =
+                              "var(--vto-primary-light)";
+                            e.currentTarget.style.borderColor =
+                              "var(--vto-primary)";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = "white";
+                            e.currentTarget.style.borderColor =
+                              "var(--vto-border)";
+                          }}
                         >
-                          <svg width="13" height="13" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" fill="currentColor"/>
-                            <path d="M10 3C5.5 3 1.73 5.61 0 9.5 1.73 13.39 5.5 16 10 16s8.27-2.61 10-6.5C18.27 5.61 14.5 3 10 3zm0 10.5a4 4 0 110-8 4 4 0 010 8z" fill="currentColor"/>
+                          <svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 20 20"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                          >
+                            <path
+                              d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"
+                              fill="currentColor"
+                            />
+                            <path
+                              d="M10 3C5.5 3 1.73 5.61 0 9.5 1.73 13.39 5.5 16 10 16s8.27-2.61 10-6.5C18.27 5.61 14.5 3 10 3zm0 10.5a4 4 0 110-8 4 4 0 010 8z"
+                              fill="currentColor"
+                            />
                           </svg>
                           Preview
                         </button>
                       </td>
                       {/* Try-On */}
                       <td style={{ padding: "12px 16px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                          }}
+                        >
                           <CustomToggle
                             checked={product.isTryonEnabled}
                             onChange={() => handleToggleProduct(product)}
                             disabled={isSubmitting}
                           />
-                          <span style={{ fontSize: "12px", color: product.isTryonEnabled ? "#10B981" : "#94A3B8", fontWeight: "600" }}>
+                          <span
+                            style={{
+                              fontSize: "12px",
+                              color: product.isTryonEnabled
+                                ? "#10B981"
+                                : "#94A3B8",
+                              fontWeight: "600",
+                            }}
+                          >
                             {product.isTryonEnabled ? "On" : "Off"}
                           </span>
                         </div>
@@ -823,7 +1149,11 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
                         <Button
                           size="slim"
                           variant="primary"
-                          onClick={() => navigate(`/app/variants?product_id=${product.numericId}&product_gid=${encodeURIComponent(product.id)}&title=${encodeURIComponent(product.title)}`)}
+                          onClick={() =>
+                            navigate(
+                              `/app/variants?product_id=${product.numericId}&product_gid=${encodeURIComponent(product.id)}&title=${encodeURIComponent(product.title)}`,
+                            )
+                          }
                         >
                           Map Variants
                         </Button>
@@ -850,67 +1180,142 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
     fd.set("shopify_product_gid", product.id);
     fd.set("title", product.title);
     fd.set("handle", product.handle);
-    fd.set("vendor", product.vendor ?? "");
-    fd.set("product_type", product.productType ?? "");
-    fd.set("featured_image", product.featuredImage?.url ?? "");
-    fd.set("price", product.price ?? "");
-    fd.set("currency", product.currency ?? "");
     fd.set("enabled", String(enabled));
     submit(fd, { method: "post" });
     setShowConfirm(false);
   }
 
   return (
-    <div className="vto-card" style={{ padding: "0", overflow: "hidden", display: "flex", flexDirection: "column", height: "100%", position: "relative" }}>
-      <div style={{ position: "relative", aspectRatio: "1/1", background: "#F1F5F9" }}>
+    <div
+      className="vto-card"
+      style={{
+        padding: "0",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        position: "relative",
+      }}
+    >
+      <div
+        style={{
+          position: "relative",
+          aspectRatio: "1/1",
+          background: "#F1F5F9",
+        }}
+      >
         {product.featuredImage ? (
-          <img src={product.featuredImage.url} alt={product.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <img
+            src={product.featuredImage.url}
+            alt={product.title}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
         ) : (
-          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#CBD5E1" }}>
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#CBD5E1",
+            }}
+          >
             <Icon source={ProductIcon} size="large" />
           </div>
         )}
-        <div style={{ position: "absolute", top: "12px", right: "12px", display: "flex", gap: "6px" }}>
-          <div style={{ 
-            background: "#10B981", 
-            color: "white", 
-            fontSize: "10px", 
-            fontWeight: "700", 
-            padding: "4px 10px", 
-            borderRadius: "20px",
-            boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
-          }}>
+        <div
+          style={{
+            position: "absolute",
+            top: "12px",
+            right: "12px",
+            display: "flex",
+            gap: "6px",
+          }}
+        >
+          <div
+            style={{
+              background: "#10B981",
+              color: "white",
+              fontSize: "10px",
+              fontWeight: "700",
+              padding: "4px 10px",
+              borderRadius: "20px",
+              boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+            }}
+          >
             TRY-ON ACTIVE
           </div>
         </div>
       </div>
 
-      <div style={{ padding: "16px", flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
-        <div style={{ fontWeight: "600", fontSize: "14px", color: "#1E293B", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div
+        style={{
+          padding: "16px",
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+        }}
+      >
+        <div
+          style={{
+            fontWeight: "600",
+            fontSize: "14px",
+            color: "#1E293B",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
           {product.title}
         </div>
         <div style={{ fontSize: "12px", color: "#64748B" }}>
           {product.vendor || "No Vendor"} • {product.productType || "Standard"}
         </div>
-        <div style={{ marginTop: "8px", fontWeight: "700", color: "var(--vto-primary)", fontSize: "15px" }}>
+        <div
+          style={{
+            marginTop: "8px",
+            fontWeight: "700",
+            color: "var(--vto-primary)",
+            fontSize: "15px",
+          }}
+        >
           {product.price} {product.currency}
         </div>
 
-        <div style={{ marginTop: "auto", paddingTop: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+        <div
+          style={{
+            marginTop: "auto",
+            paddingTop: "16px",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
           <Button
             size="slim"
-            onClick={() => window.open(`https://${shop}/products/${product.handle}`, "_blank")}
+            onClick={() =>
+              window.open(
+                `https://${shop}/products/${product.handle}`,
+                "_blank",
+              )
+            }
           >
             Preview
           </Button>
           <Button
             size="slim"
             variant="primary"
-            onClick={() => navigate(`/app/variants?product_id=${product.numericId}&product_gid=${encodeURIComponent(product.id)}&title=${encodeURIComponent(product.title)}`)}
+            onClick={() =>
+              navigate(
+                `/app/variants?product_id=${product.numericId}&product_gid=${encodeURIComponent(product.id)}&title=${encodeURIComponent(product.title)}`,
+              )
+            }
           >
             Edit
           </Button>
-          
+
           <button
             onClick={() => setShowConfirm(true)}
             style={{
@@ -925,46 +1330,98 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
               color: "#EF4444",
               cursor: "pointer",
               transition: "all 0.2s",
-              marginLeft: "auto"
+              marginLeft: "auto",
             }}
             title="Delete Try-On"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2m-6 9l4 4m0-4l-4 4"/></svg>
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2m-6 9l4 4m0-4l-4 4" />
+            </svg>
           </button>
         </div>
       </div>
 
       {showConfirm && (
-        <div style={{
-          position: "absolute",
-          inset: 0,
-          background: "rgba(255, 255, 255, 0.96)",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "20px",
-          textAlign: "center",
-          zIndex: 100,
-          backdropFilter: "blur(2px)"
-        }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(255, 255, 255, 0.96)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            textAlign: "center",
+            zIndex: 100,
+            backdropFilter: "blur(2px)",
+          }}
+        >
           <div style={{ color: "#EF4444", marginBottom: "12px" }}>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            <svg
+              width="32"
+              height="32"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
           </div>
-          <Text variant="bodyMd" fontWeight="bold">Delete Try-On?</Text>
+          <Text variant="bodyMd" fontWeight="bold">
+            Delete Try-On?
+          </Text>
           <p style={{ fontSize: "13px", color: "#64748B", marginTop: "4px" }}>
             This will disable the try-on button for this product.
           </p>
-          <div style={{ marginTop: "20px", display: "flex", gap: "10px", width: "100%" }}>
+          <div
+            style={{
+              marginTop: "20px",
+              display: "flex",
+              gap: "10px",
+              width: "100%",
+            }}
+          >
             <button
               onClick={() => setShowConfirm(false)}
-              style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid var(--vto-border)", background: "white", cursor: "pointer", fontSize: "13px", fontWeight: "600" }}
+              style={{
+                flex: 1,
+                padding: "8px",
+                borderRadius: "6px",
+                border: "1px solid var(--vto-border)",
+                background: "white",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: "600",
+              }}
             >
               Cancel
             </button>
             <button
               onClick={() => handleToggle(false)}
-              style={{ flex: 1, padding: "8px", borderRadius: "6px", border: "none", background: "#EF4444", color: "white", cursor: "pointer", fontSize: "13px", fontWeight: "600" }}
+              style={{
+                flex: 1,
+                padding: "8px",
+                borderRadius: "6px",
+                border: "none",
+                background: "#EF4444",
+                color: "white",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: "600",
+              }}
             >
               Delete
             </button>
@@ -981,7 +1438,6 @@ const ITEMS_PER_PAGE = 10;
 
 export default function Products() {
   const { collections, shop, stats } = useLoaderData();
-  const actionData = useActionData();
   const submit = useSubmit();
   const navigate = useNavigate();
   const navigation = useNavigation();
@@ -992,8 +1448,8 @@ export default function Products() {
   const [openDropdown, setOpenDropdown] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
 
-  const filtered = collections.filter(c =>
-    c.title.toLowerCase().includes(searchQuery.toLowerCase())
+  const filtered = collections.filter((c) =>
+    c.title.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
@@ -1006,90 +1462,146 @@ export default function Products() {
 
   const allEnabledProducts = Array.from(
     new Map(
-      collections.flatMap(c => c.products).filter(p => p.isTryonEnabled).map(p => [p.id, p])
-    ).values()
+      collections
+        .flatMap((c) => c.products)
+        .filter((p) => p.isTryonEnabled)
+        .map((p) => [p.id, p]),
+    ).values(),
   );
 
-  const filteredEnabledProducts = allEnabledProducts.filter(p =>
-    p.title.toLowerCase().includes(enabledSearchQuery.toLowerCase())
+  const filteredEnabledProducts = allEnabledProducts.filter((p) =>
+    p.title.toLowerCase().includes(enabledSearchQuery.toLowerCase()),
   );
 
   return (
-    <Page fullWidth backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
+    <Page
+      fullWidth
+      backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}
+    >
       {/* Header */}
       <div className="vto-header" style={{ marginBottom: "24px" }}>
         <div>
           <h1 className="vto-title">Product Catalog</h1>
-          <p className="vto-subtitle">Manage AI try-on availability across your live collections.</p>
+          <p className="vto-subtitle">
+            Manage AI try-on availability across your live collections.
+          </p>
         </div>
       </div>
 
-      {actionData && actionData.ok === false && actionData.error ? (
-        <div style={{ marginBottom: "16px" }}>
-          <Banner tone="critical" title="Could not update try-on status">
-            <p>{actionData.error}</p>
-          </Banner>
-        </div>
-      ) : null}
-
       {/* KPI Cards */}
       <div className="vto-grid-3col" style={{ marginBottom: "32px" }}>
-        <div className="vto-card" style={{ display: "flex", alignItems: "center", padding: "20px" }}>
+        <div
+          className="vto-card"
+          style={{ display: "flex", alignItems: "center", padding: "20px" }}
+        >
           <div className="vto-stat-icon-wrapper vto-stat-icon-blue">
             <Icon source={ProductIcon} />
           </div>
           <div>
             <div className="vto-kpi-label">Live Collections</div>
-            <div className="vto-kpi-value" style={{ fontSize: "24px", color: "#1E293B" }}>{stats.totalCollections}</div>
+            <div
+              className="vto-kpi-value"
+              style={{ fontSize: "24px", color: "#1E293B" }}
+            >
+              {stats.totalCollections}
+            </div>
           </div>
         </div>
 
-        <div className="vto-card" style={{ display: "flex", alignItems: "center", padding: "20px" }}>
+        <div
+          className="vto-card"
+          style={{ display: "flex", alignItems: "center", padding: "20px" }}
+        >
           <div className="vto-stat-icon-wrapper vto-stat-icon-green">
             <Icon source={CheckCircleIcon} />
           </div>
           <div>
             <div className="vto-kpi-label">Try-On Enabled</div>
-            <div className="vto-kpi-value" style={{ fontSize: "24px", color: "#1E293B" }}>{stats.tryonEnabledCount}</div>
+            <div
+              className="vto-kpi-value"
+              style={{ fontSize: "24px", color: "#1E293B" }}
+            >
+              {stats.tryonEnabledCount}
+            </div>
           </div>
         </div>
 
-        <div className="vto-card" style={{ display: "flex", alignItems: "center", padding: "20px" }}>
+        <div
+          className="vto-card"
+          style={{ display: "flex", alignItems: "center", padding: "20px" }}
+        >
           <div className="vto-stat-icon-wrapper vto-stat-icon-purple">
             <Icon source={MagicIcon} />
           </div>
           <div>
             <div className="vto-kpi-label">Active Products</div>
-            <div className="vto-kpi-value" style={{ fontSize: "24px", color: "#1E293B" }}>{stats.totalProducts}</div>
+            <div
+              className="vto-kpi-value"
+              style={{ fontSize: "24px", color: "#1E293B" }}
+            >
+              {stats.totalProducts}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Collections Table */}
       <div className="vto-card" style={{ padding: "0" }}>
-        <div style={{ padding: "20px", borderBottom: "1px solid var(--vto-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div
+          style={{
+            padding: "20px",
+            borderBottom: "1px solid var(--vto-border)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
           <div>
-            <h2 style={{ fontSize: "16px", fontWeight: "700", color: "#1E293B", margin: 0 }}>Live Collections</h2>
-            <p style={{ fontSize: "13px", color: "#64748B", margin: "3px 0 0" }}>
-              {filtered.length} published collection{filtered.length !== 1 ? "s" : ""} with active products
+            <h2
+              style={{
+                fontSize: "16px",
+                fontWeight: "700",
+                color: "#1E293B",
+                margin: 0,
+              }}
+            >
+              Live Collections
+            </h2>
+            <p
+              style={{ fontSize: "13px", color: "#64748B", margin: "3px 0 0" }}
+            >
+              {filtered.length} published collection
+              {filtered.length !== 1 ? "s" : ""} with active products
             </p>
           </div>
           <div className="vto-search-wrapper" style={{ width: "280px" }}>
-            <div className="vto-search-icon"><Icon source={SearchIcon} /></div>
+            <div className="vto-search-icon">
+              <Icon source={SearchIcon} />
+            </div>
             <input
               type="text"
               className="vto-search-input"
               placeholder="Search collections..."
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
         </div>
 
         {filtered.length === 0 ? (
           <div style={{ padding: "60px 24px", textAlign: "center" }}>
-            <div style={{ color: "#CBD5E1", marginBottom: "12px" }}><Icon source={ProductIcon} /></div>
-            <div style={{ fontWeight: "600", color: "#1E293B", marginBottom: "4px" }}>No collections found</div>
+            <div style={{ color: "#CBD5E1", marginBottom: "12px" }}>
+              <Icon source={ProductIcon} />
+            </div>
+            <div
+              style={{
+                fontWeight: "600",
+                color: "#1E293B",
+                marginBottom: "4px",
+              }}
+            >
+              No collections found
+            </div>
             <div style={{ fontSize: "13px", color: "#64748B" }}>
               {searchQuery
                 ? `No collections match "${searchQuery}".`
@@ -1110,7 +1622,7 @@ export default function Products() {
                   </tr>
                 </thead>
                 <tbody>
-                  {paginated.map(collection => (
+                  {paginated.map((collection) => (
                     <CollectionRow
                       key={collection.id}
                       collection={collection}
@@ -1128,20 +1640,32 @@ export default function Products() {
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <div style={{ padding: "16px 20px", borderTop: "1px solid var(--vto-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div
+                style={{
+                  padding: "16px 20px",
+                  borderTop: "1px solid var(--vto-border)",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
                 <Text variant="bodySm" tone="subdued">
-                  Showing {start + 1}–{Math.min(start + ITEMS_PER_PAGE, filtered.length)} of {filtered.length} collections
+                  Showing {start + 1}–
+                  {Math.min(start + ITEMS_PER_PAGE, filtered.length)} of{" "}
+                  {filtered.length} collections
                 </Text>
                 <div className="vto-pagination">
-                  {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
-                    <button
-                      key={page}
-                      className={`vto-page-btn${page === currentPage ? " active" : ""}`}
-                      onClick={() => setCurrentPage(page)}
-                    >
-                      {page}
-                    </button>
-                  ))}
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map(
+                    (page) => (
+                      <button
+                        key={page}
+                        className={`vto-page-btn${page === currentPage ? " active" : ""}`}
+                        onClick={() => setCurrentPage(page)}
+                      >
+                        {page}
+                      </button>
+                    ),
+                  )}
                 </div>
               </div>
             )}
@@ -1151,40 +1675,61 @@ export default function Products() {
 
       {/* Enabled Products Cards Section */}
       <div style={{ marginTop: "48px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "24px" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            marginBottom: "24px",
+          }}
+        >
           <div>
-            <h2 style={{ fontSize: "20px", fontWeight: "700", color: "#1E293B", margin: 0 }}>Try-On Enabled Products</h2>
+            <h2
+              style={{
+                fontSize: "20px",
+                fontWeight: "700",
+                color: "#1E293B",
+                margin: 0,
+              }}
+            >
+              Try-On Enabled Products
+            </h2>
             <p style={{ fontSize: "14px", color: "#64748B", marginTop: "4px" }}>
               Quickly manage products with virtual try-on active
             </p>
           </div>
           <div className="vto-search-wrapper" style={{ width: "320px" }}>
-            <div className="vto-search-icon"><Icon source={SearchIcon} /></div>
+            <div className="vto-search-icon">
+              <Icon source={SearchIcon} />
+            </div>
             <input
               type="text"
               className="vto-search-input"
               placeholder="Search enabled products..."
               value={enabledSearchQuery}
-              onChange={e => setEnabledSearchQuery(e.target.value)}
+              onChange={(e) => setEnabledSearchQuery(e.target.value)}
             />
           </div>
         </div>
 
         {filteredEnabledProducts.length === 0 ? (
-          <div className="vto-card" style={{ padding: "80px 24px", textAlign: "center" }}>
+          <div
+            className="vto-card"
+            style={{ padding: "80px 24px", textAlign: "center" }}
+          >
             <div style={{ color: "#CBD5E1", marginBottom: "16px" }}>
               <Icon source={CheckCircleIcon} size="large" />
             </div>
             <Text variant="headingMd">No enabled products found</Text>
             <p style={{ fontSize: "14px", color: "#64748B", marginTop: "8px" }}>
-              {enabledSearchQuery 
+              {enabledSearchQuery
                 ? `No active products match "${enabledSearchQuery}"`
                 : "Enable try-on for products in the collections table above to see them here."}
             </p>
           </div>
         ) : (
           <div className="vto-grid-auto">
-            {filteredEnabledProducts.map(product => (
+            {filteredEnabledProducts.map((product) => (
               <EnabledProductCard
                 key={product.id}
                 product={product}

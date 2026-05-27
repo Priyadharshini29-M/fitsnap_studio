@@ -35,6 +35,10 @@
     return;
   }
 
+  // ── Free-tier usage limit ────────────────────────────────────────────────────
+  var MAX_FREE_TRYONS = 3;
+  var USAGE_KEY       = "tryfit_usage";
+
   // ── Polyfill: Element.closest for IE / old Android ──────────────────────────
   if (typeof Element !== "undefined" && !Element.prototype.closest) {
     Element.prototype.closest = function (sel) {
@@ -87,6 +91,8 @@
     _countdownSeconds: 0,
     _selectedVariantId: null,
     _tryOnVariantId: null,
+    _lastAvatarBase64: null,
+    _lastClothingImageUrl: null,
 
     // ══════════════════════════════════════════════════════════════════════
     // INIT
@@ -202,11 +208,17 @@
         log("hoisted overlay to body");
       }
 
-      // Remove the `for` attribute from the upload label so the browser's native
-      // label→input binding cannot open the picker a second time alongside our
-      // manual inp.click() call. The input is nested inside the label so no
-      // `for` is needed for accessibility — we handle clicks explicitly.
-      var uploadLbl = keeper.querySelector("label[for='tryfit-file-input']");
+      // Break the native label→input activation that causes the file picker to
+      // open twice. The input is NESTED inside the label (no `for` attribute),
+      // so removing `for` is a no-op. Move the input out of the label so the
+      // browser can no longer activate it natively when the label is clicked.
+      // inp.click() in _triggerFileInput and the `change` event listener both
+      // work regardless of where the input sits in the DOM.
+      var fileInp2 = keeper.querySelector("#tryfit-file-input");
+      var uploadLbl = keeper.querySelector("#tryfit-upload-label");
+      if (fileInp2 && uploadLbl && uploadLbl.contains(fileInp2)) {
+        uploadLbl.insertAdjacentElement("afterend", fileInp2);
+      }
       if (uploadLbl) uploadLbl.removeAttribute("for");
     },
 
@@ -494,8 +506,9 @@
         "change",
         function (e) {
           if (e.target && e.target.id === "tryfit-file-input") {
-            // Refresh debounce timestamp so the synthetic refocus click that
-            // some browsers fire after the picker closes cannot re-open it.
+            // File selected — release picker mutex immediately rather than
+            // waiting for visibilitychange (which never fires on desktop Chrome).
+            self._filePickerActive = false;
             self._lastFileTriggerAt = Date.now();
             var file = e.target.files && e.target.files[0];
             if (file) {
@@ -631,16 +644,22 @@
         self._filePickerActive = false;
         self._lastFileTriggerAt = Date.now();
         document.removeEventListener("visibilitychange", onVisibilityChange);
+        window.removeEventListener("focus", onWindowFocus);
         clearTimeout(failsafeTimer);
         log("file picker mutex released");
       }
       function onVisibilityChange() {
-        // Page becomes visible when user returns from OS file picker (selection or cancel)
+        // Mobile: page becomes hidden when OS picker opens, visible when it closes
         if (!document.hidden) { releasePickerMutex(); }
       }
+      function onWindowFocus() {
+        // Desktop (Chrome/Windows): window regains focus when file dialog closes
+        releasePickerMutex();
+      }
       document.addEventListener("visibilitychange", onVisibilityChange);
-      // 30s failsafe: always reset mutex even if visibilitychange never fires
-      var failsafeTimer = setTimeout(releasePickerMutex, 30000);
+      window.addEventListener("focus", onWindowFocus);
+      // 5s failsafe in case neither visibilitychange nor window.focus fires
+      var failsafeTimer = setTimeout(releasePickerMutex, 5000);
 
       console.log("INPUT_CLICK: calling inp.click()");
       inp.click();
@@ -724,8 +743,16 @@
         title_font_weight: "600",
         title_font_family: "Inter, sans-serif",
         subtitle_font_family: "Inter, sans-serif",
-        desktop_title_font_size: 16,
+        desktop_title_font_size: 20,
         mobile_title_font_size: 14,
+        desktop_widget_width: 0,
+        desktop_widget_width_unit: "px",
+        desktop_widget_height: 0,
+        desktop_widget_height_unit: "px",
+        mobile_widget_width: 100,
+        mobile_widget_width_unit: "%",
+        mobile_widget_height: 0,
+        mobile_widget_height_unit: "auto",
         desktop_padding_top: 10,
         desktop_padding_right: 24,
         desktop_padding_bottom: 10,
@@ -782,6 +809,44 @@
       var btn = document.getElementById("tryfit-open-btn");
       var embedRoot = document.getElementById("tryfit-embed-root");
 
+      // ── CSS custom properties ─────────────────────────────────────────────
+      // Apply before any early-return so collection pages (which have no
+      // #tryfit-open-btn) still get the correct merchant colors on the modal.
+      var bgColor = s.button_color || "#111827";
+      var textColor = s.button_text_color || "#FFFFFF";
+      document.documentElement.style.setProperty("--tryfit-primary", bgColor);
+      document.documentElement.style.setProperty("--tryfit-primary-fg", textColor);
+      try {
+        var c = bgColor.replace("#", "");
+        if (c.length === 6) {
+          var rv = parseInt(c.substring(0, 2), 16);
+          var gv = parseInt(c.substring(2, 4), 16);
+          var bv = parseInt(c.substring(4, 6), 16);
+          document.documentElement.style.setProperty(
+            "--tryfit-primary-hover",
+            "#" +
+              Math.max(0, rv - 30).toString(16).padStart(2, "0") +
+              Math.max(0, gv - 30).toString(16).padStart(2, "0") +
+              Math.max(0, bv - 30).toString(16).padStart(2, "0"),
+          );
+          document.documentElement.style.setProperty(
+            "--tryfit-primary-tint",
+            "rgba(" + rv + "," + gv + "," + bv + ",0.08)",
+          );
+          document.documentElement.style.setProperty(
+            "--tryfit-primary-border",
+            "rgba(" + rv + "," + gv + "," + bv + ",0.22)",
+          );
+        }
+      } catch (ignore) {}
+      // Also write scoped vars on the embed root so the widget element picks them up
+      try {
+        var widgetId =
+          (embedRoot && embedRoot.dataset && embedRoot.dataset.widgetId) ||
+          "fitfyce-embed";
+        this._ensureWidgetVars(widgetId, s);
+      } catch (ignore) {}
+
       // Product pages: use live API data (enabled_product_ids) as the primary
       // source of truth so that a disabled product's button is removed even when
       // the storefront HTML was served from a CDN cache that still contains it.
@@ -818,65 +883,18 @@
           btn = document.getElementById("tryfit-open-btn");
         }
         if (!btn) {
-          log("[warn] tryfit-open-btn not found — settings not applied");
+          log("[warn] tryfit-open-btn not found — CSS vars applied, button styling skipped");
           return;
         }
       }
 
       var isMobile = window.innerWidth <= 768;
 
-      // ── CSS custom properties (used by modal & hover states) ─────────────
-      try {
-        var widgetRoot =
-          (btn.closest && btn.closest("[data-widget-id]")) ||
-          document.getElementById("tryfit-embed-root");
-        var widgetId =
-          (widgetRoot && widgetRoot.dataset && widgetRoot.dataset.widgetId) ||
-          "fitfyce-embed";
-        this._ensureWidgetVars(widgetId, s);
-      } catch (ignore) {}
-
-      // ── 1. Background color ──────────────────────────────────────────────
-      var bgColor = s.button_color || "#111827";
+      // ── 1. Button background ──────────────────────────────────────────────
       btn.style.setProperty("background", bgColor, "important");
-      document.documentElement.style.setProperty("--tryfit-primary", bgColor);
-      try {
-        var c = bgColor.replace("#", "");
-        if (c.length === 6) {
-          var rv = parseInt(c.substring(0, 2), 16);
-          var gv = parseInt(c.substring(2, 4), 16);
-          var bv = parseInt(c.substring(4, 6), 16);
-          document.documentElement.style.setProperty(
-            "--tryfit-primary-hover",
-            "#" +
-              Math.max(0, rv - 30)
-                .toString(16)
-                .padStart(2, "0") +
-              Math.max(0, gv - 30)
-                .toString(16)
-                .padStart(2, "0") +
-              Math.max(0, bv - 30)
-                .toString(16)
-                .padStart(2, "0"),
-          );
-          document.documentElement.style.setProperty(
-            "--tryfit-primary-tint",
-            "rgba(" + rv + "," + gv + "," + bv + ",0.08)",
-          );
-          document.documentElement.style.setProperty(
-            "--tryfit-primary-border",
-            "rgba(" + rv + "," + gv + "," + bv + ",0.22)",
-          );
-        }
-      } catch (ignore) {}
 
-      // ── 2. Text color ────────────────────────────────────────────────────
-      var textColor = s.button_text_color || "#FFFFFF";
+      // ── 2. Button text color ─────────────────────────────────────────────
       btn.style.setProperty("color", textColor, "important");
-      document.documentElement.style.setProperty(
-        "--tryfit-primary-fg",
-        textColor,
-      );
 
       // ── 3. Hover background ──────────────────────────────────────────────
       if (s.hover_bg_color) {
@@ -926,28 +944,20 @@
       }
 
       // ── 6. Height (viewport-aware) ───────────────────────────────────────
-      var wHeight, wHeightUnit;
+      var wHeight, hUnit;
       if (isMobile) {
-        wHeight =
-          s.mobile_widget_height != null
-            ? s.mobile_widget_height
-            : s.button_height || 0;
-        wHeightUnit = s.mobile_widget_height_unit || "auto";
+        wHeight = s.mobile_widget_height != null ? s.mobile_widget_height : s.button_height || 0;
+        hUnit = s.mobile_widget_height_unit || "auto";
       } else {
-        wHeight =
-          s.desktop_widget_height != null
-            ? s.desktop_widget_height
-            : s.button_height || 0;
-        wHeightUnit =
-          s.desktop_widget_height_unit || (wHeight > 0 ? "px" : "auto");
+        wHeight = s.desktop_widget_height != null ? s.desktop_widget_height : s.button_height || 0;
+        hUnit = s.desktop_widget_height_unit || "auto";
       }
-      if (wHeightUnit === "auto" || !wHeight) {
-        btn.style.setProperty("height", "auto", "important");
-        btn.style.setProperty("min-height", "", "important");
-      } else {
+      if (hUnit !== "auto" && wHeight > 0) {
         btn.style.setProperty("height", wHeight + "px", "important");
-        btn.style.setProperty("min-height", "", "important");
+      } else {
+        btn.style.setProperty("height", "auto", "important");
       }
+      btn.style.setProperty("min-height", "", "important");
 
       // ── 7. Padding (viewport-aware) ──────────────────────────────────────
       var padTop = isMobile
@@ -1135,6 +1145,46 @@
       // ── 12. Reveal button (remove FOUC hide) ─────────────────────────────
       btn.style.setProperty("opacity", "1", "important");
       btn.style.setProperty("visibility", "visible", "important");
+
+    },
+
+    _matchThemeBuyButton: function (btn) {
+      if (!btn) return;
+
+      var selectors = [
+        '.shopify-payment-button__button--unbranded',
+        '.shopify-payment-button__button',
+        '.product-form__cart-submit',
+        'button[name="add"]',
+        '.btn--full.add-to-cart',
+        '[data-testid="Checkout-button"]',
+      ];
+
+      var buyBtn = null;
+      for (var i = 0; i < selectors.length; i++) {
+        var el = document.querySelector(selectors[i]);
+        if (el && el !== btn && el.offsetHeight > 0) { buyBtn = el; break; }
+      }
+      if (!buyBtn) return;
+
+      var h = buyBtn.offsetHeight;
+      var computed = window.getComputedStyle(buyBtn);
+      var fs = computed.fontSize;
+
+      if (h > 0) {
+        btn.style.setProperty("height", h + "px", "important");
+        btn.style.setProperty("min-height", h + "px", "important");
+        btn.style.setProperty("padding-top", "0", "important");
+        btn.style.setProperty("padding-bottom", "0", "important");
+        // Hide subtitle so content fits cleanly within the matched height
+        var subEl = btn.querySelector(".tryfit-btn-subtitle");
+        if (subEl) subEl.style.setProperty("display", "none", "important");
+      }
+
+      if (fs) {
+        var titleEl = btn.querySelector(".tryfit-btn-title");
+        if (titleEl) titleEl.style.setProperty("font-size", fs, "important");
+      }
     },
 
     _removeInjectedProductButton: function () {
@@ -1271,8 +1321,25 @@
       var pr = s.button_padding_right != null ? s.button_padding_right : 24;
       var pb = s.button_padding_bottom != null ? s.button_padding_bottom : 12;
       var pl = s.button_padding_left != null ? s.button_padding_left : 24;
-      var width =
-        s.button_width && s.button_width > 0 ? s.button_width + "px" : "100%";
+      var isMobileInit = window.innerWidth <= 768;
+      var initW = isMobileInit
+        ? (s.mobile_widget_width != null ? s.mobile_widget_width : s.button_width || 0)
+        : (s.desktop_widget_width != null ? s.desktop_widget_width : s.button_width || 0);
+      var initWUnit = isMobileInit
+        ? (s.mobile_widget_width_unit || "%")
+        : (s.desktop_widget_width_unit || "px");
+      var initH = isMobileInit
+        ? (s.mobile_widget_height != null ? s.mobile_widget_height : s.button_height || 0)
+        : (s.desktop_widget_height != null ? s.desktop_widget_height : s.button_height || 0);
+      var initHUnit = isMobileInit
+        ? (s.mobile_widget_height_unit || "auto")
+        : (s.desktop_widget_height_unit || "auto");
+      var width = initW > 0
+        ? (initW + (initWUnit === "%" ? "%" : "px"))
+        : "100%";
+      var height = initH > 0 && initHUnit !== "auto"
+        ? (initH + "px")
+        : "auto";
       btn.style.cssText =
         "background:" +
         bg +
@@ -1290,6 +1357,8 @@
         radius +
         "px;cursor:pointer;width:" +
         width +
+        ";height:" +
+        height +
         ";display:flex;flex-direction:column;align-items:center;justify-content:center;margin:10px 0;box-sizing:border-box;transition:opacity 0.15s;gap:2px;pointer-events:auto;";
 
       // Preserve the raw widget-styles payload on the injected button so
@@ -1305,13 +1374,7 @@
         btn.style.setProperty("color", fg, "important");
         btn.style.setProperty("border-radius", radius + "px", "important");
         btn.style.setProperty("width", width, "important");
-        btn.style.setProperty(
-          "height",
-          s.button_height && s.button_height > 0
-            ? s.button_height + "px"
-            : "auto",
-          "important",
-        );
+        btn.style.setProperty("height", height, "important");
         btn.style.setProperty("padding-top", pt + "px", "important");
         btn.style.setProperty("padding-right", pr + "px", "important");
         btn.style.setProperty("padding-bottom", pb + "px", "important");
@@ -1507,6 +1570,41 @@
       };
     },
 
+    // Builds a palette object from live merchant settings so the collection modal
+    // uses the same colors as the product page modal.
+    _buildPaletteFromSettings: function (s) {
+      if (!s || !s.button_color) return null;
+      var primary = s.button_color;
+      var c = primary.replace("#", "");
+      var primaryHover = primary;
+      var primaryTint = "rgba(17,24,39,0.08)";
+      var primaryBorder = "rgba(17,24,39,0.20)";
+      var shadowBtn = "0 4px 16px rgba(17,24,39,0.25)";
+      var focusRing = "0 0 0 3px rgba(17,24,39,0.20)";
+      if (c.length === 6) {
+        var rv = parseInt(c.substring(0, 2), 16);
+        var gv = parseInt(c.substring(2, 4), 16);
+        var bv = parseInt(c.substring(4, 6), 16);
+        primaryHover = "#" +
+          Math.max(0, rv - 30).toString(16).padStart(2, "0") +
+          Math.max(0, gv - 30).toString(16).padStart(2, "0") +
+          Math.max(0, bv - 30).toString(16).padStart(2, "0");
+        primaryTint = "rgba(" + rv + "," + gv + "," + bv + ",0.08)";
+        primaryBorder = "rgba(" + rv + "," + gv + "," + bv + ",0.22)";
+        shadowBtn = "0 4px 16px rgba(" + rv + "," + gv + "," + bv + ",0.30)";
+        focusRing = "0 0 0 3px rgba(" + rv + "," + gv + "," + bv + ",0.24)";
+      }
+      return {
+        primary:      primary,
+        primaryFg:    s.button_text_color || "#ffffff",
+        primaryHover: primaryHover,
+        primaryTint:  primaryTint,
+        primaryBorder: primaryBorder,
+        shadowBtn:    shadowBtn,
+        focusRing:    focusRing,
+      };
+    },
+
     _applyModalPalette: function (palette) {
       if (!palette) return;
 
@@ -1616,7 +1714,10 @@
 
       var cards = Array.prototype.filter.call(
         document.querySelectorAll(
-          '.product-card,.product-item,[class*="ProductItem"],.grid__item,.collection-grid__item,[data-product-card],.grid-product,[class*="product-card"]',
+          '.product-card,.product-item,[class*="ProductItem"],.grid__item,' +
+          '.collection-grid__item,[data-product-card],.grid-product,[class*="product-card"],' +
+          '.card-wrapper,.product-card-wrapper,[class*="card-wrapper"],' +
+          '.product__wrapper,.product_card,.product-block,.product-wrap',
         ),
         function (el) {
           return !!el.querySelector('a[href*="/products/"]');
@@ -1629,7 +1730,7 @@
           .querySelectorAll('a[href*="/products/"]')
           .forEach(function (link) {
             var card = link.closest(
-              'li,article,[class*="product"],[class*="grid-item"]',
+              'li,article,[class*="product"],[class*="card"],[class*="grid-item"]',
             );
             if (card && seen.indexOf(card) === -1) {
               seen.push(card);
@@ -1668,7 +1769,7 @@
       icon.style.cssText =
         "position:absolute;" +
         pos +
-        ";z-index:10;background:" +
+        ";z-index:1;background:" +
         (s.button_color || "#111827") +
         ";color:" +
         (s.button_text_color || "#ffffff") +
@@ -1768,26 +1869,7 @@
                   window.Shopify.currency &&
                   window.Shopify.currency.active) ||
                 "INR",
-              modalPalette: {
-                primary: "#6b3f17",
-                primaryFg: "#ffffff",
-                primaryHover: "#5a3313",
-                primaryTint: "rgba(107,63,23,0.08)",
-                primaryBorder: "rgba(107,63,23,0.20)",
-                surface: "#ffffff",
-                surface2: "#f8f4ee",
-                border: "#e4d8c8",
-                borderHover: "#cbbba6",
-                text1: "#111827",
-                text2: "#667085",
-                text3: "#98a2b3",
-                overlayBg: "rgba(17, 17, 17, 0.66)",
-                shadowModal:
-                  "0 24px 64px rgba(40,24,12,0.18), 0 0 0 1px rgba(40,24,12,0.05)",
-                shadowImg: "0 8px 32px rgba(40,24,12,0.14)",
-                shadowBtn: "0 4px 16px rgba(107,63,23,0.30)",
-                focusRing: "0 0 0 3px rgba(107,63,23,0.24)",
-              },
+              modalPalette: self._buildPaletteFromSettings(self._settingsCache),
             },
           );
           self._selectedVariantId = self.config.selectedVariantId || null;
@@ -1990,6 +2072,9 @@
       this._lastFileTriggerAt = 0; // reset debounce so next modal open works immediately
       this._selectedVariantId = null;
       this._tryOnVariantId = null;
+      this._lastAvatarBase64 = null;
+      this._lastClothingImageUrl = null;
+      this._restoreErrorStep();
 
       // Release object URL held for the processing-step photo preview
       if (this._processingPreviewUrl) {
@@ -2093,6 +2178,13 @@
         log("handlePhotoSelect — try-on already in progress, ignoring duplicate trigger");
         return;
       }
+
+      // ── Free-tier limit check ──────────────────────────────────────────────
+      if (this._getUsageCount() >= MAX_FREE_TRYONS) {
+        this._showLimitReached();
+        return;
+      }
+
       this._tryOnInProgress = true;
 
       var allowedTypes = [
@@ -2121,13 +2213,6 @@
       this._showStep("processing");
       this.showProgress("Resizing your photo…");
 
-      // Pre-reset bar — use setProperty important so theme CSS can't override it.
-      var _bar = document.getElementById("tryfit-progress-bar");
-      if (_bar) {
-        _bar.style.setProperty("transition", "none", "important");
-        _bar.style.setProperty("width", "0%", "important");
-      }
-
       // Show uploaded photo thumbnail in the processing step so the user
       // can see their photo was received while the AI works.
       var prevWrap = document.getElementById("tryfit-processing-preview");
@@ -2144,7 +2229,7 @@
         this._processingPreviewUrl = objUrl;
       }
 
-      this.resizeImage(file, 1024, 1024)
+      this.toJpegBlob(file)
         .then(function (blob) {
           self.showProgress("FitSnap is creating your look…");
           self.startProgressAnimation(28);
@@ -2230,6 +2315,32 @@
       });
     },
 
+    // Convert uploaded file to JPEG at original dimensions (no downscaling).
+    // JPEG conversion is still needed so the server receives a consistent format.
+    toJpegBlob: function (file) {
+      return new Promise(function (resolve) {
+        var img = new Image();
+        var url = URL.createObjectURL(file);
+        img.onload = function () {
+          URL.revokeObjectURL(url);
+          var canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          canvas.getContext("2d").drawImage(img, 0, 0);
+          canvas.toBlob(
+            function (blob) { resolve(blob || file); },
+            "image/jpeg",
+            0.92,
+          );
+        };
+        img.onerror = function () {
+          URL.revokeObjectURL(url);
+          resolve(file);
+        };
+        img.src = url;
+      });
+    },
+
     runTryOn: function (avatarBlob) {
       var self = this;
       var variant = this.getSelectedVariant();
@@ -2270,6 +2381,10 @@
       // The clothing image is sent as a URL so the PHP server can download it
       // directly — this keeps the POST body small and avoids browser CORS limits.
       return self._blobToBase64(avatarBlob).then(function (avatarBase64) {
+        // Store so the result-step variant picker can re-run without re-uploading
+        self._lastAvatarBase64 = avatarBase64;
+        self._lastClothingImageUrl = clothingImage;
+
         var controller = window.AbortController ? new AbortController() : null;
         var timeoutId = controller
           ? setTimeout(function () {
@@ -2386,6 +2501,7 @@
 
     showResult: function (imageUrl) {
       this._tryOnInProgress = false;
+      this._incrementUsageCount();
       var img = document.getElementById("tryfit-result-img");
       if (img) {
         img.src = imageUrl;
@@ -2429,6 +2545,70 @@
       log("error:", msg);
     },
 
+    // ── Free-tier usage limit helpers ────────────────────────────────────────
+
+    _getUsageCount: function () {
+      try {
+        var stored = localStorage.getItem(USAGE_KEY);
+        if (!stored) return 0;
+        var data = JSON.parse(stored);
+        return (typeof data.count === "number" && data.count >= 0) ? data.count : 0;
+      } catch (e) {
+        return 0;
+      }
+    },
+
+    _incrementUsageCount: function () {
+      try {
+        var stored = localStorage.getItem(USAGE_KEY);
+        var data = stored ? JSON.parse(stored) : {};
+        data.count = ((typeof data.count === "number" && data.count >= 0) ? data.count : 0) + 1;
+        localStorage.setItem(USAGE_KEY, JSON.stringify(data));
+        log("try-on usage count:", data.count);
+      } catch (e) {
+        // localStorage unavailable (incognito quota, etc.) — silently skip
+      }
+    },
+
+    _showLimitReached: function () {
+      this._tryOnInProgress = false;
+      var heading = document.querySelector("#tryfit-step-error .tryfit-heading");
+      if (heading) {
+        heading.textContent = "Free Try-Ons Used Up";
+        heading.dataset.limitMode = "true";
+      }
+      var msgEl = document.getElementById("tryfit-error-msg");
+      if (msgEl) {
+        msgEl.textContent =
+          "You’ve used all " +
+          MAX_FREE_TRYONS +
+          " free virtual try-ons for this browser. " +
+          "Visit the full product page to explore more details.";
+      }
+      var retryBtn = document.getElementById("tryfit-retry-error");
+      if (retryBtn) {
+        retryBtn.textContent = "Close";
+        retryBtn.setAttribute("data-tryfit-action", "close");
+        retryBtn.dataset.limitMode = "true";
+      }
+      this._showStep("error");
+      log("try-on limit reached — max:", MAX_FREE_TRYONS);
+    },
+
+    _restoreErrorStep: function () {
+      var heading = document.querySelector("#tryfit-step-error .tryfit-heading");
+      if (heading && heading.dataset.limitMode) {
+        heading.textContent = "Something went wrong";
+        delete heading.dataset.limitMode;
+      }
+      var retryBtn = document.getElementById("tryfit-retry-error");
+      if (retryBtn && retryBtn.dataset.limitMode) {
+        retryBtn.textContent = "Try Again";
+        retryBtn.setAttribute("data-tryfit-action", "retry");
+        delete retryBtn.dataset.limitMode;
+      }
+    },
+
     showToast: function (msg, durationMs) {
       // Remove any existing toast before showing a new one
       var existing = document.querySelector(".tryfit-toast");
@@ -2446,67 +2626,12 @@
       }, durationMs || 2500);
     },
 
-    startProgressAnimation: function (durationSeconds) {
-      var self = this;
-      console.log("PROGRESS_START:", durationSeconds);
-
-      if (this._progressTimer) {
-        clearInterval(this._progressTimer);
-        this._progressTimer = null;
-      }
-
-      var bar = document.getElementById("tryfit-progress-bar");
-      if (!bar) { console.log("PROGRESS_START: bar element not found"); return; }
-
-      // Read merchant color from the JS-applied CSS variable; fall back to indigo.
-      var primary = "#6366f1";
-      var secondary = "#4f46e5";
-      try {
-        var cs = getComputedStyle(document.documentElement);
-        var v1 = cs.getPropertyValue("--tryfit-primary").trim();
-        var v2 = cs.getPropertyValue("--tryfit-primary-hover").trim();
-        if (v1) primary = v1;
-        if (v2) secondary = v2;
-      } catch (ignore) {}
-
-      // Use setProperty("...", "important") for EVERY visual property.
-      // This beats any Shopify theme CSS that uses !important on child divs,
-      // which was causing the bar to stay invisible despite JS width updates.
-      bar.style.setProperty("height", "100%", "important");
-      bar.style.setProperty("border-radius", "100px", "important");
-      bar.style.setProperty("background",
-        "linear-gradient(90deg, " + primary + ", " + secondary + ")", "important");
-      bar.style.setProperty("position", "relative", "important");
-      bar.style.setProperty("transition", "none", "important");
-      // Start at 2% so the filled bar is immediately visible the moment the step shows.
-      bar.style.setProperty("width", "2%", "important");
-
-      console.log("FILLER_WIDTH: starting, color=" + primary);
-
-      var startTime = Date.now();
-      var totalMs = durationSeconds * 1000;
-
-      this._progressTimer = setInterval(function () {
-        var elapsed = Date.now() - startTime;
-        var pct = Math.min(95, Math.round(95 * (1 - Math.exp(-3 * elapsed / totalMs))));
-        bar.style.setProperty("width", pct + "%", "important");
-        console.log("FILLER_WIDTH:", pct);
-        if (pct >= 95) {
-          clearInterval(self._progressTimer);
-          self._progressTimer = null;
-        }
-      }, 200);
-    },
+    startProgressAnimation: function () {},
 
     _stopProgress: function () {
       if (this._progressTimer) {
         clearInterval(this._progressTimer);
         this._progressTimer = null;
-      }
-      var bar = document.getElementById("tryfit-progress-bar");
-      if (bar) {
-        bar.style.setProperty("transition", "none", "important");
-        bar.style.setProperty("width", "100%", "important");
       }
     },
 
@@ -2940,6 +3065,88 @@
       return (this.config.clothingImages || {})[String(variantId)] || null;
     },
 
+    // Returns the clothing image URL for a given variant using the same
+    // priority chain as runTryOn: admin mapping → variant image → product image.
+    _getClothingImageForVariant: function (variant) {
+      if (!variant) return null;
+      var mapping = this.getVariantMapping(variant.id);
+      if (mapping && mapping.tryon_image_url) return mapping.tryon_image_url;
+      var fi = variant.featured_image || variant.image;
+      if (fi && fi.src) return fi.src;
+      return this.config.featuredImage || null;
+    },
+
+    // Re-runs the try-on on the result step using the stored avatar image and a
+    // new clothing image (called when the user picks a variant with a different image).
+    _rerunTryOnForVariant: function (variant, clothingImage) {
+      if (this._tryOnInProgress) return;
+      if (!this._lastAvatarBase64) return;
+
+      var self = this;
+      var avatarBase64 = this._lastAvatarBase64;
+
+      this._tryOnInProgress = true;
+      this._tryOnVariantId = variant.id;
+      this._lastClothingImageUrl = clothingImage;
+
+      if (clothingImage.indexOf("//") === 0) clothingImage = "https:" + clothingImage;
+
+      this._showStep("processing");
+      this.showProgress("FitSnap is creating your look…");
+
+      this.startProgressAnimation(28);
+
+      var controller = window.AbortController ? new AbortController() : null;
+      var timeoutId = controller ? setTimeout(function () { controller.abort(); }, 95000) : null;
+      var shop = self.config.shop || window.location.hostname;
+
+      var opts = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clothing_image: clothingImage,
+          avatar_image: avatarBase64,
+          shopify_variant_id: variant.id,
+          shopify_product_id: self.config.productId,
+          session_id: self.sessionId,
+        }),
+      };
+      if (controller) opts.signal = controller.signal;
+
+      fetch(self.config.proxyUrl + "/tryon?shop=" + encodeURIComponent(shop), opts)
+        .then(function (r) {
+          if (timeoutId) clearTimeout(timeoutId);
+          if (!r.ok) {
+            return r.json().catch(function () { return {}; }).then(function (errBody) {
+              return Promise.reject(new Error(errBody.error || "Something went wrong. Please try again."));
+            });
+          }
+          return r.json();
+        })
+        .then(function (data) {
+          self._stopProgress();
+          if (data.result_image) {
+            self.showResult(data.result_image);
+          } else {
+            self.showError(data.error || "Try-on failed. Please try again.");
+          }
+        })
+        .catch(function (err) {
+          if (timeoutId) clearTimeout(timeoutId);
+          self._stopProgress();
+          var msg;
+          if (err && err.name === "AbortError") {
+            msg = "This is taking longer than expected. Please try again.";
+          } else if (err && err.message && err.message.length < 200) {
+            msg = err.message;
+          } else {
+            msg = "Something went wrong. Please try again.";
+          }
+          self.showError(msg);
+          log("_rerunTryOnForVariant error:", err);
+        });
+    },
+
     // ── Result step: option groups + single Add to Cart CTA ─────────
 
     _renderResultVariantGrid: function () {
@@ -3101,6 +3308,17 @@
         this._updateOptionSelection();
         this._updatePriceDisplay();
         this._updateAddCartLabel();
+
+        // If the user is viewing a result and the new variant has a different
+        // clothing image, automatically regenerate the try-on result.
+        var resultStep = document.getElementById("tryfit-step-result");
+        var isOnResult = resultStep && resultStep.style.display !== "none";
+        if (isOnResult && this._lastAvatarBase64) {
+          var newClothing = this._getClothingImageForVariant(match);
+          if (newClothing && newClothing !== this._lastClothingImageUrl) {
+            this._rerunTryOnForVariant(match, newClothing);
+          }
+        }
       }
     },
 

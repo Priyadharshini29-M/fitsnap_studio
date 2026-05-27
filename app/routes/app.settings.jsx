@@ -1293,7 +1293,9 @@ function LivePreview({
   collectionPosition,
   showOnCollection,
   buttonWidth,
+  buttonWidthUnit,
   buttonHeight,
+  buttonHeightUnit,
   buttonPadding,
   buttonMargin,
 }) {
@@ -1389,8 +1391,12 @@ function LivePreview({
     color: btnTxt,
     border: "none",
     borderRadius: `${borderRadius}px`,
-    width: buttonWidth > 0 ? `${buttonWidth}px` : "100%",
-    height: buttonHeight > 0 ? `${buttonHeight}px` : "auto",
+    width: buttonWidth > 0
+      ? (buttonWidthUnit === "%" ? `${buttonWidth}%` : `${buttonWidth}px`)
+      : "100%",
+    height: buttonHeight > 0 && buttonHeightUnit !== "auto"
+      ? `${buttonHeight}px`
+      : "auto",
     paddingTop: `${buttonPadding.top}px`,
     paddingRight: `${buttonPadding.right}px`,
     paddingBottom: `${buttonPadding.bottom}px`,
@@ -1532,7 +1538,9 @@ LivePreview.propTypes = {
   collectionPosition: PropTypes.string,
   showOnCollection: PropTypes.bool,
   buttonWidth: PropTypes.number,
+  buttonWidthUnit: PropTypes.string,
   buttonHeight: PropTypes.number,
+  buttonHeightUnit: PropTypes.string,
   buttonPadding: PropTypes.object,
   buttonMargin: PropTypes.object,
 };
@@ -2665,8 +2673,10 @@ export default function Settings() {
               iconOpacity={iconOpacity}
               showOnCollection={showOnCollection}
               collectionPosition={collectionPosition}
-              buttonWidth={buttonWidth}
-              buttonHeight={buttonHeight}
+              buttonWidth={widgetDimensions[viewMode].width}
+              buttonWidthUnit={widgetDimensions[viewMode].widthUnit}
+              buttonHeight={widgetDimensions[viewMode].heightUnit === "auto" ? 0 : widgetDimensions[viewMode].height}
+              buttonHeightUnit={widgetDimensions[viewMode].heightUnit}
               buttonPadding={paddingByView[viewMode]}
               buttonMargin={buttonMargin}
             />

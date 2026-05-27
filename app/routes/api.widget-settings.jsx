@@ -7,9 +7,9 @@
  * Auth-guarded via Shopify session.
  */
 import { authenticate } from "../shopify.server";
-import { getMerchantByDomain, ensureMerchant } from "../lib/merchant.server";
+import { ensureMerchant } from "../lib/merchant.server";
 import phpApiClient from "../lib/php-api.server";
-import { PHP_API_URL, PHP_API_SECRET } from "../lib/env.server";
+import { PHP_API_URL } from "../lib/env.server";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -34,17 +34,17 @@ export async function loader({ request }) {
     return Response.json({}, { headers: CORS });
   }
 
-  const merchant = await getMerchantByDomain(shop).catch(() => null);
-  const apiKey = merchant?.api_key ?? PHP_API_SECRET;
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5_000);
 
   try {
-    const res = await fetch(`${phpBase}/settings`, {
-      headers: { "X-Api-Key": apiKey },
-      signal: controller.signal,
-    });
+    // Call the public widget-settings endpoint directly — it scopes by shop domain,
+    // returns the correctly-formatted flat config, and includes enabled_product_ids
+    // and enabled_product_handles so the widget can filter products by this shop.
+    const res = await fetch(
+      `${phpBase}/api/widget-settings?shop=${encodeURIComponent(shop)}`,
+      { signal: controller.signal },
+    );
     clearTimeout(timer);
 
     const data = res.ok ? await res.json().catch(() => ({})) : {};

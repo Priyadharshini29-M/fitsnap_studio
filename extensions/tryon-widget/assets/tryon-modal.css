@@ -14,18 +14,18 @@
 
 /* ── Design tokens ───────────────────────────────────────────────────────── */
 :root {
-  /* Brand accent — JS overrides these with merchant settings */
-  --tryfit-primary:        #6b3f17;
+  /* Brand accent — JS overrides these at runtime with per-merchant settings */
+  --tryfit-primary:        #111827;
   --tryfit-primary-fg:     #ffffff;
-  --tryfit-primary-hover:  #5a3313;
-  --tryfit-primary-tint:   rgba(107,63,23,0.08);
-  --tryfit-primary-border: rgba(107,63,23,0.20);
+  --tryfit-primary-hover:  #1f2937;
+  --tryfit-primary-tint:   rgba(17,24,39,0.08);
+  --tryfit-primary-border: rgba(17,24,39,0.20);
 
-  /* Surface & layout */
+  /* Surface & layout — neutral whites/greys, never merchant-tinted */
   --tryfit-surface:        #ffffff;
-  --tryfit-surface-2:      #f8f4ee;
-  --tryfit-border:         #e4d8c8;
-  --tryfit-border-hover:   #cbbba6;
+  --tryfit-surface-2:      #f9fafb;
+  --tryfit-border:         #e5e7eb;
+  --tryfit-border-hover:   #d1d5db;
 
   /* Typography */
   --tryfit-text-1:         #111827;
@@ -38,13 +38,13 @@
   --tryfit-radius-sm:      10px;
   --tryfit-radius-xs:      8px;
 
-  /* Shadow system */
-  --tryfit-shadow-modal:   0 24px 64px rgba(40,24,12,0.18), 0 0 0 1px rgba(40,24,12,0.05);
-  --tryfit-shadow-img:     0 8px 32px rgba(40,24,12,0.14);
-  --tryfit-shadow-btn:     0 4px 16px rgba(107,63,23,0.30);
+  /* Shadow system — neutral dark shadows, no merchant color bleed */
+  --tryfit-shadow-modal:   0 24px 64px rgba(0,0,0,0.16), 0 0 0 1px rgba(0,0,0,0.05);
+  --tryfit-shadow-img:     0 8px 32px rgba(0,0,0,0.12);
+  --tryfit-shadow-btn:     0 4px 16px rgba(17,24,39,0.25);
 
   /* Interaction */
-  --tryfit-focus-ring:     0 0 0 3px rgba(107,63,23,0.24);
+  --tryfit-focus-ring:     0 0 0 3px rgba(17,24,39,0.20);
   --tryfit-transition:     0.18s cubic-bezier(0.4, 0, 0.2, 1);
 
   /* Overlay */
@@ -504,37 +504,6 @@
   font-style: italic;
 }
 
-/* Progress bar */
-.tryfit-progress-bar-wrap {
-  width:         100%;
-  height:        6px;
-  background:    #e2e8f0;
-  border-radius: 100px;
-  overflow:      hidden;
-  margin-bottom: 12px;
-}
-
-.tryfit-progress-bar {
-  height:        100%;
-  width:         0%;
-  border-radius: 100px;
-  /* Hardcoded fallback so the bar is visible even before JS sets the CSS var */
-  background:    #6366f1;
-  background:    linear-gradient(90deg, var(--tryfit-primary, #6366f1), var(--tryfit-primary-hover, #4f46e5));
-  position:      relative;
-  overflow:      hidden;
-  will-change:   width;
-}
-
-/* Shimmer sweep on the progress bar */
-.tryfit-progress-bar::after {
-  content:    "";
-  position:   absolute;
-  inset:      0;
-  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
-  animation:  tryfit-shimmer 1.8s ease-in-out infinite;
-  transform:  translateX(-100%);
-}
 
 .tryfit-processing-note {
   font-size:  12px;
@@ -1243,19 +1212,11 @@
   50%       { box-shadow: 0 0 0 8px var(--tryfit-primary-border), var(--tryfit-shadow-btn); }
 }
 
-/* Progress bar shimmer */
-@keyframes tryfit-shimmer {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(300%);  }
-}
-
-
 /* Respect reduced-motion preferences */
 @media (prefers-reduced-motion: reduce) {
   .tryfit-privacy-ring,
   .tryfit-ai-ring,
   .tryfit-ai-core,
-  .tryfit-progress-bar::after,
   .tryfit-modal { animation: none !important; }
   .tryfit-btn,
   .tryfit-upload-label,
