@@ -1,4 +1,4 @@
-import { useLoaderData, useSubmit, useNavigation, useActionData } from "react-router";
+import { useLoaderData, useSubmit, useNavigation, useActionData, useNavigate } from "react-router";
 import PlanGate from "../components/PlanGate";
 import { planAtLeast } from "../lib/plans";
 import { useState, useEffect } from "react";
@@ -57,7 +57,7 @@ export async function loader({ request }) {
   const variants      = (product?.variants?.edges ?? []).map((e) => e.node);
   const productImages = (product?.images?.edges   ?? []).map((e) => e.node);
 
-  const api = phpApiClient(apiKey, PHP_API_URL);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
   const planRes = await api.checkPlanLimit();
   const rawPlan = planRes.ok ? (planRes.data?.plan ?? "free") : "free";
@@ -85,7 +85,7 @@ export async function action({ request }) {
   const { admin, session } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
   const body = await request.json();
-  const api  = phpApiClient(apiKey, PHP_API_URL);
+  const api  = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
   const res = await api.saveVariantMapping(body);
   if (!res.ok) return { ok: false, error: res.error ?? null };
@@ -303,10 +303,11 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
 
 export default function Variants() {
   const { product, variants, mappings, productImages, internalId, productId, currentPlan } = useLoaderData();
+  const navigate = useNavigate();
 
   if (!product) {
     return (
-      <Page title="Variant Mappings" backAction={{ url: "/app/products", content: "Products" }}>
+      <Page title="Variant Mappings" backAction={{ onAction: () => navigate("/app/products"), content: "Products" }}>
         <Text as="p">No product selected. Go back to Products.</Text>
       </Page>
     );
@@ -329,7 +330,7 @@ export default function Variants() {
   return (
     <Page
       title={`Variant Mappings — ${product.title}`}
-      backAction={{ url: "/app/products", content: "Products" }}
+      backAction={{ onAction: () => navigate("/app/products"), content: "Products" }}
     >
       <Layout>
         <Layout.Section>

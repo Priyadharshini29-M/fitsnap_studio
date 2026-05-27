@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useLoaderData, useFetcher } from "react-router";
+import { useLoaderData, useFetcher, useNavigate } from "react-router";
 import PlanGate from "../components/PlanGate";
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -13,12 +13,18 @@ import { PHP_API_URL } from "../lib/env.server";
 export async function loader({ request }) {
   const { session } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
-  const api = phpApiClient(apiKey, PHP_API_URL);
-  const [res, planRes] = await Promise.all([api.getSettings(), api.checkPlanLimit()]);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
+  const [res, planRes] = await Promise.all([
+    api.getSettings(),
+    api.checkPlanLimit(),
+  ]);
   return {
-    settings:    res.ok ? (res.data ?? null) : null,
-    shop:        session.shop,
-    currentPlan: planRes.ok ? (planRes.data?.plan ?? "free") : "free",
+    settings: res.ok ? (res.data ?? null) : null,
+    shop: session.shop,
+    currentPlan: planRes.ok
+      ? ((planRes.data?.plan === "basic" ? "free" : planRes.data?.plan) ??
+        "free")
+      : "free",
   };
 }
 
@@ -865,7 +871,10 @@ function SearchableSelect({ label, value, onChange, options }) {
   useEffect(() => {
     if (!open) return;
     function handleOutside(e) {
-      if (triggerRef.current && !triggerRef.current.closest("[data-lang-select]").contains(e.target)) {
+      if (
+        triggerRef.current &&
+        !triggerRef.current.closest("[data-lang-select]").contains(e.target)
+      ) {
         setOpen(false);
         setQuery("");
       }
@@ -879,96 +888,194 @@ function SearchableSelect({ label, value, onChange, options }) {
     ? options.filter(
         (o) =>
           o.label.toLowerCase().includes(query.toLowerCase()) ||
-          (o.nativeName && o.nativeName.toLowerCase().includes(query.toLowerCase())),
+          (o.nativeName &&
+            o.nativeName.toLowerCase().includes(query.toLowerCase())),
       )
     : options;
 
-  const dropdown = open && rect && createPortal(
-    <div
-      style={{
-        position: "fixed",
-        top: rect.bottom + 4,
-        left: rect.left,
-        width: rect.width,
-        zIndex: 99999,
-        background: "#fff",
-        border: "1px solid #E5E7EB",
-        borderRadius: "12px",
-        boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
-        overflow: "hidden",
-      }}
-    >
-      {/* Search */}
-      <div style={{ padding: "8px", borderBottom: "1px solid #F3F4F6", background: "#F9FAFB" }}>
-        <div style={{ position: "relative" }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth="2"
-            style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            type="text"
-            placeholder="Search languages…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{ width: "100%", paddingLeft: "32px", paddingRight: "12px", paddingTop: "8px", paddingBottom: "8px",
-              fontSize: "13px", border: "1px solid #E5E7EB", borderRadius: "8px", background: "#fff",
-              outline: "none", boxSizing: "border-box" }}
-          />
-        </div>
-      </div>
-
-      {/* List */}
-      <div style={{ maxHeight: "260px", overflowY: "auto" }}>
-        {filtered.length > 0 ? filtered.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onChange(opt.value);
-              setOpen(false);
-              setQuery("");
-            }}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
-              width: "100%", textAlign: "left", padding: "10px 16px", fontSize: "13px", border: "none",
-              cursor: "pointer", background: value === opt.value ? "#EEF2FF" : "transparent",
-              color: value === opt.value ? "#3B5BDB" : "#374151",
-              fontWeight: value === opt.value ? 600 : 400,
-            }}
-          >
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {opt.label}
-            </span>
-            {opt.nativeName && opt.nativeName !== opt.label && (
-              <span style={{ fontSize: "11px", color: "#9CA3AF", flexShrink: 0 }}>{opt.nativeName}</span>
-            )}
-          </button>
-        )) : (
-          <div style={{ padding: "32px 16px", textAlign: "center", fontSize: "13px", color: "#9CA3AF" }}>
-            No languages match &quot;{query}&quot;
+  const dropdown =
+    open &&
+    rect &&
+    createPortal(
+      <div
+        style={{
+          position: "fixed",
+          top: rect.bottom + 4,
+          left: rect.left,
+          width: rect.width,
+          zIndex: 99999,
+          background: "#fff",
+          border: "1px solid #E5E7EB",
+          borderRadius: "12px",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
+          overflow: "hidden",
+        }}
+      >
+        {/* Search */}
+        <div
+          style={{
+            padding: "8px",
+            borderBottom: "1px solid #F3F4F6",
+            background: "#F9FAFB",
+          }}
+        >
+          <div style={{ position: "relative" }}>
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#9CA3AF"
+              strokeWidth="2"
+              style={{
+                position: "absolute",
+                left: "10px",
+                top: "50%",
+                transform: "translateY(-50%)",
+                pointerEvents: "none",
+              }}
+            >
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Search languages…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              style={{
+                width: "100%",
+                paddingLeft: "32px",
+                paddingRight: "12px",
+                paddingTop: "8px",
+                paddingBottom: "8px",
+                fontSize: "13px",
+                border: "1px solid #E5E7EB",
+                borderRadius: "8px",
+                background: "#fff",
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* Footer */}
-      <div style={{ padding: "8px 16px", borderTop: "1px solid #F3F4F6", background: "#F9FAFB",
-        display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: "11px", color: "#9CA3AF" }}>{filtered.length} of {options.length} languages</span>
-        {query && (
-          <button type="button" onMouseDown={(e) => { e.preventDefault(); setQuery(""); }}
-            style={{ fontSize: "11px", color: "#3B5BDB", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}>
-            Clear
-          </button>
-        )}
-      </div>
-    </div>,
-    document.body
-  );
+        {/* List */}
+        <div style={{ maxHeight: "260px", overflowY: "auto" }}>
+          {filtered.length > 0 ? (
+            filtered.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange(opt.value);
+                  setOpen(false);
+                  setQuery("");
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "12px",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "10px 16px",
+                  fontSize: "13px",
+                  border: "none",
+                  cursor: "pointer",
+                  background: value === opt.value ? "#EEF2FF" : "transparent",
+                  color: value === opt.value ? "#3B5BDB" : "#374151",
+                  fontWeight: value === opt.value ? 600 : 400,
+                }}
+              >
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {opt.label}
+                </span>
+                {opt.nativeName && opt.nativeName !== opt.label && (
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: "#9CA3AF",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {opt.nativeName}
+                  </span>
+                )}
+              </button>
+            ))
+          ) : (
+            <div
+              style={{
+                padding: "32px 16px",
+                textAlign: "center",
+                fontSize: "13px",
+                color: "#9CA3AF",
+              }}
+            >
+              No languages match &quot;{query}&quot;
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div
+          style={{
+            padding: "8px 16px",
+            borderTop: "1px solid #F3F4F6",
+            background: "#F9FAFB",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span style={{ fontSize: "11px", color: "#9CA3AF" }}>
+            {filtered.length} of {options.length} languages
+          </span>
+          {query && (
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setQuery("");
+              }}
+              style={{
+                fontSize: "11px",
+                color: "#3B5BDB",
+                fontWeight: 600,
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>,
+      document.body,
+    );
 
   return (
     <div data-lang-select="">
-      <label style={{ display: "block", fontSize: "13px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+      <label
+        style={{
+          display: "block",
+          fontSize: "13px",
+          fontWeight: 700,
+          color: "#111827",
+          marginBottom: "6px",
+        }}
+      >
         {label}
       </label>
       <button
@@ -976,25 +1083,64 @@ function SearchableSelect({ label, value, onChange, options }) {
         type="button"
         onClick={openDropdown}
         style={{
-          width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "10px 14px", fontSize: "13px", border: "1px solid #E5E7EB", borderRadius: "10px",
-          background: "#fff", cursor: "pointer", textAlign: "left",
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "10px 14px",
+          fontSize: "13px",
+          border: "1px solid #E5E7EB",
+          borderRadius: "10px",
+          background: "#fff",
+          cursor: "pointer",
+          textAlign: "left",
         }}
       >
         {selected ? (
-          <span style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-            <span style={{ fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              minWidth: 0,
+            }}
+          >
+            <span
+              style={{
+                fontWeight: 600,
+                color: "#111827",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
               {selected.label}
             </span>
             {selected.nativeName && selected.nativeName !== selected.label && (
-              <span style={{ fontSize: "11px", color: "#9CA3AF", flexShrink: 0 }}>{selected.nativeName}</span>
+              <span
+                style={{ fontSize: "11px", color: "#9CA3AF", flexShrink: 0 }}
+              >
+                {selected.nativeName}
+              </span>
             )}
           </span>
         ) : (
           <span style={{ color: "#9CA3AF" }}>Select a language…</span>
         )}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5"
-          style={{ flexShrink: 0, marginLeft: "8px", transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#94A3B8"
+          strokeWidth="2.5"
+          style={{
+            flexShrink: 0,
+            marginLeft: "8px",
+            transform: open ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 0.2s",
+          }}
+        >
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
@@ -1464,6 +1610,7 @@ Toast.propTypes = {
 export default function Settings() {
   const { settings, shop, currentPlan } = useLoaderData();
   const fetcher = useFetcher();
+  const navigate = useNavigate();
   const isSubmitting = fetcher.state === "submitting";
   const actionData = fetcher.data;
 
@@ -1477,6 +1624,53 @@ export default function Settings() {
   const [widgetSubtitle, setWidgetSubtitle] = useState(
     settings?.widget_subtitle ?? "See how it fits before you buy",
   );
+  const [modalSettingsJson, setModalSettingsJson] = useState(() => {
+    const fallback = {
+      modal_title: "FitSnap",
+      modal_subtitle: "See how this item looks on you before you buy.",
+      privacy_notice_text: "Your photo is never stored after processing",
+      privacy_cta_text: "Get Started",
+      upload_heading: "Upload Your Photo",
+      upload_subheading: "Choose a front-facing photo for the best result.",
+      upload_primary_desktop: "Click or drag & drop your photo",
+      upload_primary_mobile: "Tap to choose a photo or use your camera",
+      upload_secondary: "JPEG, PNG or WebP — up to 5 MB",
+      camera_title: "Allow Camera Access",
+      camera_description: "We need your camera to take a photo.",
+      camera_allow_text: "Allow Camera",
+      camera_back_text: "Upload a photo instead",
+      processing_heading: "Creating your look…",
+      processing_resize_text: "Resizing your photo…",
+      processing_generating_text: "FitSnap is creating your look…",
+      processing_message: "FitSnap is creating your look…",
+      processing_note: "This usually takes 20–35 seconds",
+      countdown_prefix_text: "Your look is ready! Decide in ",
+      coupon_label: "Your exclusive discount",
+      add_to_cart_text: "Add to Cart",
+      buy_now_text: "Buy Now",
+      add_to_cart_loading_text: "Adding…",
+      buy_now_loading_text: "Loading…",
+      save_image_text: "Save",
+      share_whatsapp_text: "Share on WhatsApp",
+      retry_text: "Try Again",
+      error_title: "Something went wrong",
+      watermark_text: "Powered by FitSnap",
+      modal_primary_color: "#6b3f17",
+      modal_primary_text_color: "#ffffff",
+      modal_primary_hover_color: "#5a3313",
+      modal_surface_color: "#ffffff",
+      modal_surface_secondary_color: "#f8f4ee",
+      modal_border_color: "#e4d8c8",
+      modal_border_hover_color: "#cbbba6",
+      modal_text_color: "#111827",
+      modal_text_secondary_color: "#667085",
+      modal_text_muted_color: "#98a2b3",
+      modal_overlay_color: "rgba(17, 17, 17, 0.66)",
+    };
+    const current = settings?.modal_settings_json;
+    if (typeof current === "string" && current.trim()) return current;
+    return JSON.stringify(current || fallback, null, 2);
+  });
 
   // Button colors & shape
   const [buttonColor, setButtonColor] = useState(
@@ -1565,7 +1759,8 @@ export default function Settings() {
     },
   });
   const [fontSizeByView, setFontSizeByView] = useState({
-    desktop: settings?.desktop_title_font_size ?? settings?.title_font_size ?? 20,
+    desktop:
+      settings?.desktop_title_font_size ?? settings?.title_font_size ?? 20,
     mobile: settings?.mobile_title_font_size ?? 14,
   });
   const [paddingByView, setPaddingByView] = useState({
@@ -1614,6 +1809,7 @@ export default function Settings() {
       {
         widget_title: widgetTitle,
         widget_subtitle: widgetSubtitle,
+        modal_settings_json: modalSettingsJson,
         // All CSS / style fields sent flat so PHP receives them as direct top-level keys.
         // Nesting them under a "css" sub-object risks them being lost when React Router
         // serialises with FormData (nested objects become the string "[object Object]").
@@ -1681,6 +1877,7 @@ export default function Settings() {
   const TABS = [
     { id: "button", label: "Button Design" },
     { id: "typography", label: "Text & Style" },
+    { id: "modal", label: "Modal Content" },
     { id: "collection", label: "Collection Icon" },
     { id: "features", label: "Features" },
   ];
@@ -1722,17 +1919,49 @@ export default function Settings() {
             justifyContent: "space-between",
           }}
         >
-          <div>
-            <h1
-              className="vto-title"
-              style={{ fontSize: "1.25rem", marginBottom: "2px" }}
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <button
+              type="button"
+              onClick={() => navigate("/app")}
+              aria-label="Back to Dashboard"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "4px",
+                borderRadius: "6px",
+                color: "#111827",
+                flexShrink: 0,
+              }}
             >
-              Button Settings &amp; Configuration
-            </h1>
-            <p className="text-[9px] text-gray-400 font-medium">
-              Manage your button appearance, collection icons, and typography
-              settings
-            </p>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+            <div>
+              <h1
+                className="vto-title"
+                style={{ fontSize: "1.25rem", marginBottom: "2px" }}
+              >
+                Button Settings &amp; Configuration
+              </h1>
+              <p className="text-[9px] text-gray-400 font-medium">
+                Manage your button appearance, collection icons, and typography
+                settings
+              </p>
+            </div>
           </div>
           <button
             onClick={handleSave}
@@ -1822,11 +2051,35 @@ export default function Settings() {
                 </SectionCard>
 
                 {/* Size & Dimensions — view-aware */}
-                <div className="vto-card" style={{ padding: 0, overflow: "hidden", marginBottom: "24px" }}>
-                  <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--vto-border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+                <div
+                  className="vto-card"
+                  style={{
+                    padding: 0,
+                    overflow: "hidden",
+                    marginBottom: "24px",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "20px 24px",
+                      borderBottom: "1px solid var(--vto-border)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <div>
-                      <h3 className="vto-title" style={{ fontSize: "1rem" }}>Size &amp; Dimensions</h3>
-                      <p className="vto-subtitle" style={{ fontSize: "0.85rem", marginTop: "4px" }}>Widget container and button dimensions per view.</p>
+                      <h3 className="vto-title" style={{ fontSize: "1rem" }}>
+                        Size &amp; Dimensions
+                      </h3>
+                      <p
+                        className="vto-subtitle"
+                        style={{ fontSize: "0.85rem", marginTop: "4px" }}
+                      >
+                        Widget container and button dimensions per view.
+                      </p>
                     </div>
                     <ViewToggle value={viewMode} onChange={setViewMode} />
                   </div>
@@ -1834,26 +2087,77 @@ export default function Settings() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
                       {/* Widget Width — view-specific */}
                       <div>
-                        <span className="block text-sm font-bold text-gray-900 mb-2">Widget Width</span>
-                        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <span className="block text-sm font-bold text-gray-900 mb-2">
+                          Widget Width
+                        </span>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "8px",
+                            alignItems: "center",
+                          }}
+                        >
                           <input
                             type="number"
                             value={widgetDimensions[viewMode].width}
                             min={0}
-                            max={widgetDimensions[viewMode].widthUnit === "%" ? 100 : 2000}
+                            max={
+                              widgetDimensions[viewMode].widthUnit === "%"
+                                ? 100
+                                : 2000
+                            }
                             onChange={(e) => {
                               const val = parseInt(e.target.value) || 0;
-                              setWidgetDimensions((prev) => ({ ...prev, [viewMode]: { ...prev[viewMode], width: val } }));
+                              setWidgetDimensions((prev) => ({
+                                ...prev,
+                                [viewMode]: { ...prev[viewMode], width: val },
+                              }));
                             }}
                             className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-900 transition-all font-semibold bg-white"
                           />
-                          <div style={{ display: "flex", background: "#F3F4F6", borderRadius: "12px", padding: "3px", gap: "2px", flexShrink: 0 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              background: "#F3F4F6",
+                              borderRadius: "12px",
+                              padding: "3px",
+                              gap: "2px",
+                              flexShrink: 0,
+                            }}
+                          >
                             {["px", "%"].map((unit) => (
                               <button
                                 key={unit}
                                 type="button"
-                                onClick={() => setWidgetDimensions((prev) => ({ ...prev, [viewMode]: { ...prev[viewMode], widthUnit: unit } }))}
-                                style={{ background: widgetDimensions[viewMode].widthUnit === unit ? "#1a1a1a" : "transparent", color: widgetDimensions[viewMode].widthUnit === unit ? "#ffffff" : "#9CA3AF", borderRadius: "9px", fontSize: "11px", fontWeight: 600, height: "28px", padding: "0 10px", border: "none", cursor: "pointer", transition: "all 0.15s" }}
+                                onClick={() =>
+                                  setWidgetDimensions((prev) => ({
+                                    ...prev,
+                                    [viewMode]: {
+                                      ...prev[viewMode],
+                                      widthUnit: unit,
+                                    },
+                                  }))
+                                }
+                                style={{
+                                  background:
+                                    widgetDimensions[viewMode].widthUnit ===
+                                    unit
+                                      ? "#1a1a1a"
+                                      : "transparent",
+                                  color:
+                                    widgetDimensions[viewMode].widthUnit ===
+                                    unit
+                                      ? "#ffffff"
+                                      : "#9CA3AF",
+                                  borderRadius: "9px",
+                                  fontSize: "11px",
+                                  fontWeight: 600,
+                                  height: "28px",
+                                  padding: "0 10px",
+                                  border: "none",
+                                  cursor: "pointer",
+                                  transition: "all 0.15s",
+                                }}
                               >
                                 {unit}
                               </button>
@@ -1863,8 +2167,16 @@ export default function Settings() {
                       </div>
                       {/* Widget Height — view-specific */}
                       <div>
-                        <span className="block text-sm font-bold text-gray-900 mb-2">Widget Height</span>
-                        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <span className="block text-sm font-bold text-gray-900 mb-2">
+                          Widget Height
+                        </span>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "8px",
+                            alignItems: "center",
+                          }}
+                        >
                           {widgetDimensions[viewMode].heightUnit === "auto" ? (
                             <div className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 font-semibold text-gray-400">
                               Auto
@@ -1877,18 +2189,60 @@ export default function Settings() {
                               max={2000}
                               onChange={(e) => {
                                 const val = parseInt(e.target.value) || 0;
-                                setWidgetDimensions((prev) => ({ ...prev, [viewMode]: { ...prev[viewMode], height: val } }));
+                                setWidgetDimensions((prev) => ({
+                                  ...prev,
+                                  [viewMode]: {
+                                    ...prev[viewMode],
+                                    height: val,
+                                  },
+                                }));
                               }}
                               className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-900 transition-all font-semibold bg-white"
                             />
                           )}
-                          <div style={{ display: "flex", background: "#F3F4F6", borderRadius: "12px", padding: "3px", gap: "2px", flexShrink: 0 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              background: "#F3F4F6",
+                              borderRadius: "12px",
+                              padding: "3px",
+                              gap: "2px",
+                              flexShrink: 0,
+                            }}
+                          >
                             {["px", "auto"].map((unit) => (
                               <button
                                 key={unit}
                                 type="button"
-                                onClick={() => setWidgetDimensions((prev) => ({ ...prev, [viewMode]: { ...prev[viewMode], heightUnit: unit } }))}
-                                style={{ background: widgetDimensions[viewMode].heightUnit === unit ? "#1a1a1a" : "transparent", color: widgetDimensions[viewMode].heightUnit === unit ? "#ffffff" : "#9CA3AF", borderRadius: "9px", fontSize: "11px", fontWeight: 600, height: "28px", padding: "0 10px", border: "none", cursor: "pointer", transition: "all 0.15s" }}
+                                onClick={() =>
+                                  setWidgetDimensions((prev) => ({
+                                    ...prev,
+                                    [viewMode]: {
+                                      ...prev[viewMode],
+                                      heightUnit: unit,
+                                    },
+                                  }))
+                                }
+                                style={{
+                                  background:
+                                    widgetDimensions[viewMode].heightUnit ===
+                                    unit
+                                      ? "#1a1a1a"
+                                      : "transparent",
+                                  color:
+                                    widgetDimensions[viewMode].heightUnit ===
+                                    unit
+                                      ? "#ffffff"
+                                      : "#9CA3AF",
+                                  borderRadius: "9px",
+                                  fontSize: "11px",
+                                  fontWeight: 600,
+                                  height: "28px",
+                                  padding: "0 10px",
+                                  border: "none",
+                                  cursor: "pointer",
+                                  transition: "all 0.15s",
+                                }}
                               >
                                 {unit}
                               </button>
@@ -1918,11 +2272,35 @@ export default function Settings() {
                 </div>
 
                 {/* Padding — view-aware */}
-                <div className="vto-card" style={{ padding: 0, overflow: "hidden", marginBottom: "24px" }}>
-                  <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--vto-border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+                <div
+                  className="vto-card"
+                  style={{
+                    padding: 0,
+                    overflow: "hidden",
+                    marginBottom: "24px",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "20px 24px",
+                      borderBottom: "1px solid var(--vto-border)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <div>
-                      <h3 className="vto-title" style={{ fontSize: "1rem" }}>Padding</h3>
-                      <p className="vto-subtitle" style={{ fontSize: "0.85rem", marginTop: "4px" }}>Inner spacing between button text and its edges.</p>
+                      <h3 className="vto-title" style={{ fontSize: "1rem" }}>
+                        Padding
+                      </h3>
+                      <p
+                        className="vto-subtitle"
+                        style={{ fontSize: "0.85rem", marginTop: "4px" }}
+                      >
+                        Inner spacing between button text and its edges.
+                      </p>
                     </div>
                     <ViewToggle value={viewMode} onChange={setViewMode} />
                   </div>
@@ -1930,7 +2308,12 @@ export default function Settings() {
                     <SpacingInput
                       label="Padding (Top / Right / Bottom / Left)"
                       values={paddingByView[viewMode]}
-                      onChange={(val) => setPaddingByView((prev) => ({ ...prev, [viewMode]: val }))}
+                      onChange={(val) =>
+                        setPaddingByView((prev) => ({
+                          ...prev,
+                          [viewMode]: val,
+                        }))
+                      }
                       suffix="px"
                     />
                   </div>
@@ -1952,213 +2335,306 @@ export default function Settings() {
 
             {/* ── Text & Style tab ── */}
             {activeTab === "typography" && (
-              <PlanGate currentPlan={currentPlan} requiredPlan="growth" featureName="Typography & Branding Controls" mode="overlay">
-              <div className="space-y-6">
-                {/* Typography — view-aware title font size */}
-                <div className="vto-card" style={{ padding: 0, overflow: "hidden", marginBottom: "24px" }}>
-                  <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--vto-border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-                    <div>
-                      <h3 className="vto-title" style={{ fontSize: "1rem" }}>Typography</h3>
-                      <p className="vto-subtitle" style={{ fontSize: "0.85rem", marginTop: "4px" }}>Control font sizes, weights and families.</p>
+              <PlanGate
+                currentPlan={currentPlan}
+                requiredPlan="growth"
+                featureName="Typography & Branding Controls"
+                mode="overlay"
+              >
+                <div className="space-y-6">
+                  {/* Typography — view-aware title font size */}
+                  <div
+                    className="vto-card"
+                    style={{
+                      padding: 0,
+                      overflow: "hidden",
+                      marginBottom: "24px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: "20px 24px",
+                        borderBottom: "1px solid var(--vto-border)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "12px",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div>
+                        <h3 className="vto-title" style={{ fontSize: "1rem" }}>
+                          Typography
+                        </h3>
+                        <p
+                          className="vto-subtitle"
+                          style={{ fontSize: "0.85rem", marginTop: "4px" }}
+                        >
+                          Control font sizes, weights and families.
+                        </p>
+                      </div>
+                      <ViewToggle value={viewMode} onChange={setViewMode} />
                     </div>
-                    <ViewToggle value={viewMode} onChange={setViewMode} />
-                  </div>
-                  <div style={{ padding: "24px" }}>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
-                      <NumberInput
-                        label={`Title Font Size (${viewMode === "desktop" ? "Desktop" : "Mobile"})`}
-                        value={fontSizeByView[viewMode]}
-                        onChange={(val) => setFontSizeByView((prev) => ({ ...prev, [viewMode]: val }))}
-                        min={8}
-                        max={72}
-                        suffix="px"
-                      />
-                      <NumberInput
-                        label="Subtitle Font Size"
-                        value={subtitleFontSize}
-                        onChange={setSubtitleFontSize}
-                        min={8}
-                        max={48}
-                        suffix="px"
-                      />
-                      <SelectField
-                        label="Title Font Weight"
-                        value={titleFontWeight}
-                        onChange={setTitleFontWeight}
-                        options={FONT_WEIGHT_OPTIONS}
-                      />
-                      <SelectField
-                        label="Title Font Family"
-                        value={titleFontFamily}
-                        onChange={setTitleFontFamily}
-                        options={FONT_FAMILY_OPTIONS}
-                      />
-                      <SelectField
-                        label="Subtitle Font Family"
-                        value={subtitleFontFamily}
-                        onChange={setSubtitleFontFamily}
-                        options={FONT_FAMILY_OPTIONS}
-                      />
+                    <div style={{ padding: "24px" }}>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
+                        <NumberInput
+                          label={`Title Font Size (${viewMode === "desktop" ? "Desktop" : "Mobile"})`}
+                          value={fontSizeByView[viewMode]}
+                          onChange={(val) =>
+                            setFontSizeByView((prev) => ({
+                              ...prev,
+                              [viewMode]: val,
+                            }))
+                          }
+                          min={8}
+                          max={72}
+                          suffix="px"
+                        />
+                        <NumberInput
+                          label="Subtitle Font Size"
+                          value={subtitleFontSize}
+                          onChange={setSubtitleFontSize}
+                          min={8}
+                          max={48}
+                          suffix="px"
+                        />
+                        <SelectField
+                          label="Title Font Weight"
+                          value={titleFontWeight}
+                          onChange={setTitleFontWeight}
+                          options={FONT_WEIGHT_OPTIONS}
+                        />
+                        <SelectField
+                          label="Title Font Family"
+                          value={titleFontFamily}
+                          onChange={setTitleFontFamily}
+                          options={FONT_FAMILY_OPTIONS}
+                        />
+                        <SelectField
+                          label="Subtitle Font Family"
+                          value={subtitleFontFamily}
+                          onChange={setSubtitleFontFamily}
+                          options={FONT_FAMILY_OPTIONS}
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <PlanGate currentPlan={currentPlan} requiredPlan="pro" featureName="Multi-language Widget" mode="overlay">
-                <SectionCard
-                  title="Language"
-                  description="Choose a language — the button text will update automatically in the preview and on your store."
-                >
-                  <SearchableSelect
-                    label="Widget Language"
-                    value={language}
-                    onChange={setLanguage}
-                    options={WORLD_LANGUAGES}
-                  />
-                </SectionCard>
-                </PlanGate>
-              </div>
+                  <PlanGate
+                    currentPlan={currentPlan}
+                    requiredPlan="pro"
+                    featureName="Multi-language Widget"
+                    mode="overlay"
+                  >
+                    <SectionCard
+                      title="Language"
+                      description="Choose a language — the button text will update automatically in the preview and on your store."
+                    >
+                      <SearchableSelect
+                        label="Widget Language"
+                        value={language}
+                        onChange={setLanguage}
+                        options={WORLD_LANGUAGES}
+                      />
+                    </SectionCard>
+                  </PlanGate>
+                </div>
               </PlanGate>
+            )}
+
+            {/* ── Modal Content tab ── */}
+            {activeTab === "modal" && (
+              <SectionCard
+                title="Modal Content JSON"
+                description="Override every modal label and color with one JSON object."
+              >
+                <div className="space-y-4">
+                  <textarea
+                    value={modalSettingsJson}
+                    onChange={(e) => setModalSettingsJson(e.target.value)}
+                    rows={24}
+                    spellCheck={false}
+                    className="w-full font-mono text-sm px-4 py-3 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-900 transition-all bg-white"
+                    style={{ minHeight: "520px", lineHeight: 1.5 }}
+                  />
+                  <p className="text-xs text-gray-500 leading-5">
+                    Supported keys include{" "}
+                    <span className="font-semibold text-gray-700">
+                      modal_title
+                    </span>
+                    ,{" "}
+                    <span className="font-semibold text-gray-700">
+                      modal_subtitle
+                    </span>
+                    ,{" "}
+                    <span className="font-semibold text-gray-700">
+                      upload_heading
+                    </span>
+                    ,{" "}
+                    <span className="font-semibold text-gray-700">
+                      camera_title
+                    </span>
+                    ,{" "}
+                    <span className="font-semibold text-gray-700">
+                      add_to_cart_text
+                    </span>
+                    ,{" "}
+                    <span className="font-semibold text-gray-700">
+                      modal_primary_color
+                    </span>
+                    , and the other starter fields in the JSON.
+                  </p>
+                </div>
+              </SectionCard>
             )}
 
             {/* ── Collection Icon tab ── */}
             {activeTab === "collection" && (
-              <PlanGate currentPlan={currentPlan} requiredPlan="growth" featureName="Collection Page Icons">
-              <SectionCard
-                title="Collection Icon"
-                description="Customize the VTO icon on product listing cards."
+              <PlanGate
+                currentPlan={currentPlan}
+                requiredPlan="growth"
+                featureName="Collection Page Icons"
               >
-                <Toggle
-                  checked={showOnCollection}
-                  onChange={setShowOnCollection}
-                  label="Show on Collection Pages"
-                  description="Enable the mini try-on icon for product listings."
-                />
+                <SectionCard
+                  title="Collection Icon"
+                  description="Customize the VTO icon on product listing cards."
+                >
+                  <Toggle
+                    checked={showOnCollection}
+                    onChange={setShowOnCollection}
+                    label="Show on Collection Pages"
+                    description="Enable the mini try-on icon for product listings."
+                  />
 
-                {showOnCollection && (
-                  <div className="space-y-8 mt-6 pt-6 border-t border-gray-100">
-                    <div>
-                      <span className="block text-sm font-bold text-gray-900 mb-4">
-                        Position on Product Cards
-                      </span>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                        {[
-                          {
-                            id: "top_left",
-                            label: "Top Left",
-                            sub: "Over image",
-                            icon: "monitor",
-                          },
-                          {
-                            id: "top_right",
-                            label: "Top Right",
-                            sub: "Over image",
-                            icon: "monitor",
-                          },
-                          {
-                            id: "bottom_left",
-                            label: "Bottom Left",
-                            sub: "Action corner",
-                            icon: "cart",
-                          },
-                          {
-                            id: "bottom_right",
-                            label: "Bottom Right",
-                            sub: "Action corner",
-                            icon: "cart",
-                          },
-                        ].map((pos) => (
-                          <PositionCard
-                            key={pos.id}
-                            id={pos.id}
-                            label={pos.label}
-                            sub={pos.sub}
-                            icon={pos.icon}
-                            active={collectionPosition === pos.id}
-                            onClick={setCollectionPosition}
-                          />
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-                      <div className="space-y-3">
-                        <span className="block text-sm font-bold text-gray-900">
-                          Icon Choice
+                  {showOnCollection && (
+                    <div className="space-y-8 mt-6 pt-6 border-t border-gray-100">
+                      <div>
+                        <span className="block text-sm font-bold text-gray-900 mb-4">
+                          Position on Product Cards
                         </span>
-                        <IconPicker
-                          value={buttonIcon}
-                          onChange={setButtonIcon}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                          {[
+                            {
+                              id: "top_left",
+                              label: "Top Left",
+                              sub: "Over image",
+                              icon: "monitor",
+                            },
+                            {
+                              id: "top_right",
+                              label: "Top Right",
+                              sub: "Over image",
+                              icon: "monitor",
+                            },
+                            {
+                              id: "bottom_left",
+                              label: "Bottom Left",
+                              sub: "Action corner",
+                              icon: "cart",
+                            },
+                            {
+                              id: "bottom_right",
+                              label: "Bottom Right",
+                              sub: "Action corner",
+                              icon: "cart",
+                            },
+                          ].map((pos) => (
+                            <PositionCard
+                              key={pos.id}
+                              id={pos.id}
+                              label={pos.label}
+                              sub={pos.sub}
+                              icon={pos.icon}
+                              active={collectionPosition === pos.id}
+                              onClick={setCollectionPosition}
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+                        <div className="space-y-3">
+                          <span className="block text-sm font-bold text-gray-900">
+                            Icon Choice
+                          </span>
+                          <IconPicker
+                            value={buttonIcon}
+                            onChange={setButtonIcon}
+                          />
+                        </div>
+                        <ColorPicker
+                          label="Icon Color"
+                          value={iconColor}
+                          onChange={setIconColor}
                         />
                       </div>
-                      <ColorPicker
-                        label="Icon Color"
-                        value={iconColor}
-                        onChange={setIconColor}
-                      />
-                    </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
-                      <ColorPicker
-                        label="Main Button Icon BG"
-                        value={mainIconBgColor}
-                        onChange={setMainIconBgColor}
-                      />
-                      <ColorPicker
-                        label="Collection Icon BG"
-                        value={collIconBgColor}
-                        onChange={setCollIconBgColor}
-                      />
-                      <NumberInput
-                        label="Icon Size"
-                        value={iconSize}
-                        onChange={setIconSize}
-                        min={8}
-                        max={48}
-                      />
-                      <NumberInput
-                        label="Icon Border Radius"
-                        value={iconRadius}
-                        onChange={setIconRadius}
-                        min={0}
-                        max={32}
-                      />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
+                        <ColorPicker
+                          label="Main Button Icon BG"
+                          value={mainIconBgColor}
+                          onChange={setMainIconBgColor}
+                        />
+                        <ColorPicker
+                          label="Collection Icon BG"
+                          value={collIconBgColor}
+                          onChange={setCollIconBgColor}
+                        />
+                        <NumberInput
+                          label="Icon Size"
+                          value={iconSize}
+                          onChange={setIconSize}
+                          min={8}
+                          max={48}
+                        />
+                        <NumberInput
+                          label="Icon Border Radius"
+                          value={iconRadius}
+                          onChange={setIconRadius}
+                          min={0}
+                          max={32}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
-              </SectionCard>
+                  )}
+                </SectionCard>
               </PlanGate>
             )}
 
             {/* ── Features & Compliance tab ── */}
             {activeTab === "features" && (
-              <PlanGate currentPlan={currentPlan} requiredPlan="growth" featureName="Advanced Features (WhatsApp Share, Conversion Tracking)">
-              <SectionCard
-                title="Features & Compliance"
-                description="Enable or disable optional features and notices."
+              <PlanGate
+                currentPlan={currentPlan}
+                requiredPlan="growth"
+                featureName="Advanced Features (WhatsApp Share, Conversion Tracking)"
               >
-                <Toggle
-                  checked={shareWa}
-                  onChange={setShareWa}
-                  label="WhatsApp Share"
-                  description="Allow customers to share their try-on results via WhatsApp."
-                />
-                <Divider />
-                <Toggle
-                  checked={saveImg}
-                  onChange={setSaveImg}
-                  label="Save Try-On Image"
-                  badge="Active"
-                  description="Allow customers to download the try-on photo."
-                />
-                <Divider />
-                <Toggle
-                  checked={privacy}
-                  onChange={setPrivacy}
-                  label="Privacy Notice"
-                  badge="Active"
-                  description="Show a consent notice before the customer uploads a photo."
-                />
-              </SectionCard>
+                <SectionCard
+                  title="Features & Compliance"
+                  description="Enable or disable optional features and notices."
+                >
+                  <Toggle
+                    checked={shareWa}
+                    onChange={setShareWa}
+                    label="WhatsApp Share"
+                    description="Allow customers to share their try-on results via WhatsApp."
+                  />
+                  <Divider />
+                  <Toggle
+                    checked={saveImg}
+                    onChange={setSaveImg}
+                    label="Save Try-On Image"
+                    badge="Active"
+                    description="Allow customers to download the try-on photo."
+                  />
+                  <Divider />
+                  <Toggle
+                    checked={privacy}
+                    onChange={setPrivacy}
+                    label="Privacy Notice"
+                    badge="Active"
+                    description="Show a consent notice before the customer uploads a photo."
+                  />
+                </SectionCard>
               </PlanGate>
             )}
           </div>

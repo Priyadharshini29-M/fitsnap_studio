@@ -1,4 +1,4 @@
-import { Form, redirect, useLoaderData, useNavigation } from "react-router";
+import { Form, redirect, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { useState } from "react";
 import { Page } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
@@ -19,7 +19,7 @@ const PLAN_RANK = { free: 0, growth: 1, pro: 2 };
 export async function loader({ request }) {
   const { session, admin } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
-  const api = phpApiClient(apiKey, PHP_API_URL);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
   const url = new URL(request.url);
   const chargeId    = url.searchParams.get("charge_id");
@@ -449,10 +449,11 @@ function FaqAccordion() {
 export default function Plans() {
   const { currentPlan, usedTryons, limitTryons } = useLoaderData();
   const navigation   = useNavigation();
+  const navigate     = useNavigate();
   const isSubmitting = navigation.state === "submitting";
 
   return (
-    <Page>
+    <Page backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
       <div className="vto-plan-page">
         {/* Header */}
         <div className="vto-plan-page-header">

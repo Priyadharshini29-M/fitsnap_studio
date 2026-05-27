@@ -73,9 +73,12 @@
     _settingsCache: null,
     _previousFocus: null,
     _lastFileTriggerAt: 0,
+    _filePickerActive: false,
     _cameraStream: null,
     _facingMode: "environment",
     _isSaving: false,
+    _tryOnInProgress: false,
+    _buyingNow: false,
     _processingPreviewUrl: null,
     _proxyUrl: "",
     _shop: "",
@@ -137,13 +140,6 @@
       if (root) {
         proxyUrl = (root.dataset.proxyUrl || "").replace(/\/$/, "");
         shop = root.dataset.shop || "";
-        if (
-          root.dataset.pageType === "product" &&
-          root.dataset.productTryon === "true" &&
-          !existingBtn
-        ) {
-          this._injectProductButton(root);
-        }
       } else if (existingBtn) {
         proxyUrl = (existingBtn.dataset.proxyUrl || "").replace(/\/$/, "");
         shop = existingBtn.dataset.shop || "";
@@ -151,6 +147,17 @@
 
       if (proxyUrl) this._proxyUrl = proxyUrl;
       if (shop) this._shop = shop;
+
+      // Debug: log context discovered from DOM
+      log(
+        "_discoverProxyAndFetch — pageType:",
+        root ? root.dataset.pageType : "(no embed-root)",
+        "productId:",
+        root && root.dataset.productId ? root.dataset.productId : "(n/a)",
+        "productTryon:",
+        root && root.dataset.productTryon ? root.dataset.productTryon : "(n/a)",
+        "shop:", shop || "(none)"
+      );
 
       // Always fetch from the app backend API — no inline CSS from Liquid/schema.
       // All button styles are defined exclusively in the backend settings panel.
@@ -238,6 +245,15 @@
             return;
           }
 
+          var collectionBtn = t.closest(".tryfit-collection-icon");
+          if (collectionBtn) {
+            log("collection btn clicked");
+            e.preventDefault();
+            e.stopPropagation();
+            self._openCollectionIcon(collectionBtn);
+            return;
+          }
+
           // ── 2. Upload area — explicitly trigger hidden file input ────────
           // Must handle BEFORE the modal-visibility guard below, because the
           // label IS inside the (visible) modal.
@@ -312,8 +328,9 @@
           var varId = actionEl && actionEl.dataset.variantId;
           var v1 = varId ? this._variantById(varId) : null;
           if (!v1) v1 = this.getSelectedResultVariant();
-          if (v1) this.addToCart(v1.id, actionEl);
-          else this.showToast("Please select a variant first.");
+          if (!v1) { this.showToast("Please select a variant first."); break; }
+          if (v1.available === false) { this.showToast("This variant is sold out."); break; }
+          this.addToCart(v1.id, actionEl);
           break;
         }
 
@@ -321,8 +338,9 @@
           var varId2 = actionEl && actionEl.dataset.variantId;
           var v2 = varId2 ? this._variantById(varId2) : null;
           if (!v2) v2 = this.getSelectedResultVariant();
-          if (v2) this.buyNow(v2.id, actionEl);
-          else this.showToast("Please select a variant first.");
+          if (!v2) { this.showToast("Please select a variant first."); break; }
+          if (v2.available === false) { this.showToast("This variant is sold out."); break; }
+          this.buyNow(v2.id, actionEl);
           break;
         }
 
@@ -334,7 +352,10 @@
 
         case "share-wa": {
           var ri = document.getElementById("tryfit-result-img");
-          self.shareWhatsApp(ri ? ri.src : "", window.location.href);
+          self.shareWhatsApp(
+            ri ? ri.src : "",
+            self.config.storefrontUrl || window.location.href,
+          );
           break;
         }
 
@@ -473,6 +494,9 @@
         "change",
         function (e) {
           if (e.target && e.target.id === "tryfit-file-input") {
+            // Refresh debounce timestamp so the synthetic refocus click that
+            // some browsers fire after the picker closes cannot re-open it.
+            self._lastFileTriggerAt = Date.now();
             var file = e.target.files && e.target.files[0];
             if (file) {
               log(
@@ -573,13 +597,21 @@
       );
     },
 
-    // ── Trigger file picker safely (guards against infinite recursion) ────────
+    // ── Trigger file picker safely (guards against double-open) ─────────────
     _triggerFileInput: function () {
-      // Debounce: when the OS picker closes after "Open", the browser fires a
-      // synthetic click on the label element. Without this guard that click
-      // re-enters this function and opens the picker a second time.
+      console.log("UPLOAD_TRIGGER", Date.now());
+
+      // Mutex: _filePickerActive is set true when the picker opens and cleared
+      // by visibilitychange (page becomes visible again when picker closes).
+      // This is more reliable than focusin which fires when inp.click() focuses
+      // the hidden input — BEFORE the OS picker even opens.
+      if (this._filePickerActive) {
+        console.log("INPUT_CLICK: BLOCKED — picker already active");
+        return;
+      }
+
       var now = Date.now();
-      if (now - this._lastFileTriggerAt < 1000) {
+      if (now - this._lastFileTriggerAt < 500) {
         log("file trigger debounced — suppressing duplicate");
         return;
       }
@@ -590,12 +622,29 @@
         log("WARN: file input not found");
         return;
       }
-      // Reset value so selecting the same file again fires a change event
-      try {
-        inp.value = "";
-      } catch (ignore) {}
+      try { inp.value = ""; } catch (ignore) {}
+
+      this._filePickerActive = true;
+      var self = this;
+
+      function releasePickerMutex() {
+        self._filePickerActive = false;
+        self._lastFileTriggerAt = Date.now();
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        clearTimeout(failsafeTimer);
+        log("file picker mutex released");
+      }
+      function onVisibilityChange() {
+        // Page becomes visible when user returns from OS file picker (selection or cancel)
+        if (!document.hidden) { releasePickerMutex(); }
+      }
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      // 30s failsafe: always reset mutex even if visibilitychange never fires
+      var failsafeTimer = setTimeout(releasePickerMutex, 30000);
+
+      console.log("INPUT_CLICK: calling inp.click()");
       inp.click();
-      log("file input .click() dispatched");
+      console.log("FILE_PICKER_OPEN: inp.click dispatched");
     },
 
     // ── MutationObserver — deduplicate overlays after Shopify section reloads ─
@@ -731,9 +780,47 @@
       if (!s || typeof s !== "object") return;
 
       var btn = document.getElementById("tryfit-open-btn");
+      var embedRoot = document.getElementById("tryfit-embed-root");
+
+      // Product pages: use live API data (enabled_product_ids) as the primary
+      // source of truth so that a disabled product's button is removed even when
+      // the storefront HTML was served from a CDN cache that still contains it.
+      // Fall back to the Liquid metafield attribute when the API predates this field.
+      if (embedRoot && embedRoot.dataset.pageType === "product") {
+        var productId = String(
+          embedRoot.dataset.productId ||
+          (btn && btn.dataset && btn.dataset.productId) ||
+          ""
+        );
+        var productEnabled;
+        if (Array.isArray(s.enabled_product_ids)) {
+          productEnabled = productId !== "" && s.enabled_product_ids.indexOf(productId) !== -1;
+        } else {
+          productEnabled = String(embedRoot.dataset.productTryon || "").toLowerCase() === "true";
+        }
+        console.log("[TryFit] TryOn Status:", {
+          productId: productId,
+          enabled: productEnabled,
+          source: Array.isArray(s.enabled_product_ids) ? "api" : "metafield",
+        });
+        if (!productEnabled) {
+          this._removeInjectedProductButton();
+          return;
+        }
+      }
+
       if (!btn) {
-        log("[warn] tryfit-open-btn not found — settings not applied");
-        return;
+        if (
+          embedRoot &&
+          embedRoot.dataset.pageType === "product"
+        ) {
+          this._injectProductButton(embedRoot, s);
+          btn = document.getElementById("tryfit-open-btn");
+        }
+        if (!btn) {
+          log("[warn] tryfit-open-btn not found — settings not applied");
+          return;
+        }
       }
 
       var isMobile = window.innerWidth <= 768;
@@ -1050,6 +1137,18 @@
       btn.style.setProperty("visibility", "visible", "important");
     },
 
+    _removeInjectedProductButton: function () {
+      var btn = document.getElementById("tryfit-open-btn");
+      if (btn && btn.parentNode) {
+        var wrap = btn.closest("#tryfit-btn-wrap");
+        if (wrap && wrap.parentNode) {
+          wrap.parentNode.removeChild(wrap);
+          return;
+        }
+        btn.parentNode.removeChild(btn);
+      }
+    },
+
     _loadFont: function (fontFamily) {
       if (!fontFamily) return;
       var name = fontFamily.split(",")[0].trim().replace(/['"]/g, "");
@@ -1147,11 +1246,22 @@
       btn.className = "tryfit-open-btn";
       btn.setAttribute("aria-label", "Virtual Try-On");
       btn.dataset.productId = root.dataset.productId || "";
+      btn.dataset.productTitle = root.dataset.productTitle || "";
+      btn.dataset.productHandle = root.dataset.productHandle || "";
+      btn.dataset.storefrontUrl = root.dataset.storefrontUrl || "";
       btn.dataset.variants = root.dataset.variants || "[]";
+      btn.dataset.options = root.dataset.options || "[]";
       btn.dataset.clothingImages = root.dataset.clothingImages || "{}";
       btn.dataset.featuredImage = root.dataset.featuredImage || "";
+      btn.dataset.productImages = root.dataset.productImages || "[]";
+      btn.dataset.selectedVariantId =
+        root.dataset.selectedVariantId || this._getPageVariantId() || "";
       btn.dataset.proxyUrl = root.dataset.proxyUrl || "";
       btn.dataset.shop = root.dataset.shop || "";
+      btn.dataset.currency =
+        root.dataset.currency ||
+        (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) ||
+        "INR";
       // Build initial cssText from provided settings or sensible defaults.
       var s = settings || this._settingsCache || {};
       var bg = s.button_color || "#111827";
@@ -1286,6 +1396,140 @@
       log("product button injected");
     },
 
+    _parseJsonDataset: function (value, fallback) {
+      if (!value) return fallback;
+      try {
+        var parsed = JSON.parse(value);
+        return parsed == null ? fallback : parsed;
+      } catch (ignore) {
+        return fallback;
+      }
+    },
+
+    _normalizeStorefrontUrl: function (url) {
+      if (!url) return "";
+      var str = String(url);
+      if (str.indexOf("http://") === 0 || str.indexOf("https://") === 0) {
+        return str;
+      }
+      if (str.charAt(0) === "/") {
+        return window.location.origin + str;
+      }
+      return window.location.origin + "/" + str;
+    },
+
+    _extractVariantIdFromUrl: function (url) {
+      if (!url) return "";
+      var match = String(url).match(/[?&]variant=(\d+)/i);
+      return match ? match[1] : "";
+    },
+
+    _pickDefaultVariant: function (variants) {
+      if (!Array.isArray(variants) || !variants.length) return null;
+      for (var i = 0; i < variants.length; i++) {
+        if (variants[i] && variants[i].available !== false) return variants[i];
+      }
+      return variants[0] || null;
+    },
+
+    _buildTryOnConfig: function (product, extras) {
+      extras = extras || {};
+      var variants = Array.isArray(product && product.variants)
+        ? product.variants
+        : [];
+      var options = Array.isArray(product && product.options)
+        ? product.options
+        : [];
+      var productImages = Array.isArray(product && product.images)
+        ? product.images.slice()
+        : [];
+      var storefrontUrl = this._normalizeStorefrontUrl(
+        extras.storefrontUrl || (product && product.url) || "",
+      );
+      var selectedVariantId =
+        String(
+          extras.selectedVariantId ||
+            this._extractVariantIdFromUrl(storefrontUrl) ||
+            extras.pageVariantId ||
+            "",
+        ) || "";
+      var selectedVariant = null;
+      for (var i = 0; i < variants.length; i++) {
+        if (String(variants[i].id) === String(selectedVariantId)) {
+          selectedVariant = variants[i];
+          break;
+        }
+      }
+      if (!selectedVariant) {
+        selectedVariant = this._pickDefaultVariant(variants);
+        if (selectedVariant) selectedVariantId = String(selectedVariant.id);
+      }
+
+      var variantImage = null;
+      if (selectedVariant) {
+        variantImage =
+          selectedVariant.featured_image || selectedVariant.image || null;
+      }
+
+      var price =
+        selectedVariant && selectedVariant.price != null
+          ? selectedVariant.price
+          : product && product.price != null
+            ? product.price
+            : null;
+      var compareAtPrice =
+        selectedVariant && selectedVariant.compare_at_price != null
+          ? selectedVariant.compare_at_price
+          : product && product.compare_at_price != null
+            ? product.compare_at_price
+            : null;
+
+      return {
+        productId: product && product.id ? String(product.id) : "",
+        productHandle:
+          extras.productHandle || (product && product.handle) || "",
+        productTitle: (product && product.title) || "",
+        selectedVariantId: selectedVariantId,
+        variantImage: variantImage || extras.variantImage || "",
+        productImages: productImages,
+        price: price,
+        compareAtPrice: compareAtPrice,
+        variants: variants,
+        options: options,
+        clothingImages: extras.clothingImages || {},
+        featuredImage:
+          extras.featuredImage || (product && product.featured_image) || "",
+        storefrontUrl: storefrontUrl,
+        proxyUrl: (extras.proxyUrl || "").replace(/\/$/, ""),
+        shop: extras.shop || "",
+        currency: extras.currency || "INR",
+        modalPalette: extras.modalPalette || null,
+      };
+    },
+
+    _applyModalPalette: function (palette) {
+      if (!palette) return;
+
+      var root = document.documentElement;
+      if (palette.primary) root.style.setProperty("--tryfit-primary", palette.primary);
+      if (palette.primaryFg) root.style.setProperty("--tryfit-primary-fg", palette.primaryFg);
+      if (palette.primaryHover) root.style.setProperty("--tryfit-primary-hover", palette.primaryHover);
+      if (palette.primaryTint) root.style.setProperty("--tryfit-primary-tint", palette.primaryTint);
+      if (palette.primaryBorder) root.style.setProperty("--tryfit-primary-border", palette.primaryBorder);
+      if (palette.surface) root.style.setProperty("--tryfit-surface", palette.surface);
+      if (palette.surface2) root.style.setProperty("--tryfit-surface-2", palette.surface2);
+      if (palette.border) root.style.setProperty("--tryfit-border", palette.border);
+      if (palette.borderHover) root.style.setProperty("--tryfit-border-hover", palette.borderHover);
+      if (palette.text1) root.style.setProperty("--tryfit-text-1", palette.text1);
+      if (palette.text2) root.style.setProperty("--tryfit-text-2", palette.text2);
+      if (palette.text3) root.style.setProperty("--tryfit-text-3", palette.text3);
+      if (palette.overlayBg) root.style.setProperty("--tryfit-overlay-bg", palette.overlayBg);
+      if (palette.shadowModal) root.style.setProperty("--tryfit-shadow-modal", palette.shadowModal);
+      if (palette.shadowImg) root.style.setProperty("--tryfit-shadow-img", palette.shadowImg);
+      if (palette.shadowBtn) root.style.setProperty("--tryfit-shadow-btn", palette.shadowBtn);
+      if (palette.focusRing) root.style.setProperty("--tryfit-focus-ring", palette.focusRing);
+    },
+
     // Debug helper: runs in page console to report widget state and computed styles
     _debugWidgetState: function () {
       var btn = document.getElementById("tryfit-open-btn");
@@ -1318,6 +1562,58 @@
 
     _injectCollectionIcons: function (s) {
       var self = this;
+
+      // Build lookup structures from API data.
+      // enabled_product_ids / enabled_product_handles are returned by the
+      // PHP public widget-settings endpoint and represent the live enabled state —
+      // not the potentially stale CDN-cached metafield on each product page.
+      var apiHasData = Array.isArray(s.enabled_product_ids);
+      var enabledIds = apiHasData ? s.enabled_product_ids : [];
+      var enabledHandles = Array.isArray(s.enabled_product_handles)
+        ? s.enabled_product_handles
+        : [];
+
+      function extractHandle(link) {
+        if (!link || !link.href) return null;
+        var m = link.href.match(/\/products\/([^/?#]+)/);
+        return m ? m[1] : null;
+      }
+
+      function isProductEnabled(card) {
+        // No API data at all → legacy mode, show icons for every card.
+        if (!apiHasData) return true;
+
+        var link = card.querySelector('a[href*="/products/"]');
+        var handle = extractHandle(link);
+        var pid = card.dataset && card.dataset.productId
+          ? String(card.dataset.productId)
+          : null;
+
+        // Handle match (preferred — available from URL without extra fetches).
+        if (handle && enabledHandles.length > 0) {
+          var okH = enabledHandles.indexOf(handle) !== -1;
+          console.log("[TryFit] TryOn Collection Status:", { handle: handle, enabled: okH });
+          return okH;
+        }
+
+        // ID match fallback (requires theme to emit data-product-id on the card).
+        if (pid && enabledIds.length > 0) {
+          var okI = enabledIds.indexOf(pid) !== -1;
+          console.log("[TryFit] TryOn Collection Status:", { productId: pid, enabled: okI });
+          return okI;
+        }
+
+        // API returned data but we can't identify this card's product.
+        // Default CLOSED — never show a button for an unknown product.
+        console.log("[TryFit] TryOn Collection Status:", {
+          handle: handle,
+          pid: pid,
+          enabled: false,
+          reason: "no-match",
+        });
+        return false;
+      }
+
       var cards = Array.prototype.filter.call(
         document.querySelectorAll(
           '.product-card,.product-item,[class*="ProductItem"],.grid__item,.collection-grid__item,[data-product-card],.grid-product,[class*="product-card"]',
@@ -1337,13 +1633,17 @@
             );
             if (card && seen.indexOf(card) === -1) {
               seen.push(card);
-              self._addCollectionIcon(card, s);
+              if (isProductEnabled(card)) {
+                self._addCollectionIcon(card, s);
+              }
             }
           });
         return;
       }
       cards.forEach(function (card) {
-        self._addCollectionIcon(card, s);
+        if (isProductEnabled(card)) {
+          self._addCollectionIcon(card, s);
+        }
       });
     },
 
@@ -1402,40 +1702,64 @@
       icon.addEventListener("click", function (e) {
         e.preventDefault();
         e.stopPropagation();
+        self._openCollectionIcon(icon);
+      });
 
-        var link = card.querySelector('a[href*="/products/"]');
-        if (!link) return;
+      card.appendChild(icon);
+    },
 
-        // Extract product handle from the card link
-        var match = link.href.match(/\/products\/([^/?#]+)/);
-        if (!match) {
-          window.location.href = link.href;
-          return;
-        }
+    _openCollectionIcon: function (icon) {
+      if (!icon) return;
 
-        var handle = match[1];
-        var proxyUrl = self._proxyUrl || "";
-        var shop = self._shop || window.location.hostname;
+      var card = icon.closest(
+        '.product-card,.product-item,[class*="ProductItem"],.grid__item,.collection-grid__item,[data-product-card],.grid-product,[class*="product-card"],li,article,[class*="product"],[class*="grid-item"]',
+      );
+      var link = card ? card.querySelector('a[href*="/products/"]') : null;
+      if (!link) {
+        this.showToast("Could not open try-on for this item.");
+        return;
+      }
 
-        // Loading state
-        icon.disabled = true;
-        icon.style.opacity = "0.55";
+      var match = link.href.match(/\/products\/([^/?#]+)/);
+      if (!match) {
+        this.showToast("Could not open try-on for this item.");
+        return;
+      }
 
-        // Fetch full product data from Shopify's AJAX API
-        fetch("/products/" + handle + ".js")
-          .then(function (r) {
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            return r.json();
-          })
-          .then(function (product) {
-            icon.disabled = false;
-            icon.style.opacity = "";
+      var handle = match[1];
+      var proxyUrl = this._proxyUrl || "";
+      var shop = this._shop || window.location.hostname;
+      var self = this;
 
-            self.config = {
-              productId: String(product.id),
-              productTitle: product.title || "",
+      icon.disabled = true;
+      icon.style.opacity = "0.55";
+
+      fetch("/products/" + handle + ".js")
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (product) {
+          icon.disabled = false;
+          icon.style.opacity = "";
+
+          self.config = self._buildTryOnConfig(
+            {
+              id: product.id,
+              handle: product.handle || handle,
+              title: product.title || "",
               variants: product.variants || [],
-              clothingImages: {}, // backend DB mapping overrides this
+              options: product.options || [],
+              images: product.images || [],
+              featured_image: product.featured_image || "",
+              url: link.href,
+            },
+            {
+              productHandle: product.handle || handle,
+              storefrontUrl: link.href,
+              selectedVariantId:
+                self._extractVariantIdFromUrl(link.href) || "",
+              clothingImages: {},
               featuredImage: product.featured_image || "",
               proxyUrl: proxyUrl,
               shop: shop,
@@ -1444,19 +1768,39 @@
                   window.Shopify.currency &&
                   window.Shopify.currency.active) ||
                 "INR",
-            };
-            log("collection try-on — product:", product.id, "handle:", handle);
-            self.openModal();
-          })
-          .catch(function () {
-            icon.disabled = false;
-            icon.style.opacity = "";
-            // Fallback: navigate to the product page
-            window.location.href = link.href;
-          });
-      });
-
-      card.appendChild(icon);
+              modalPalette: {
+                primary: "#6b3f17",
+                primaryFg: "#ffffff",
+                primaryHover: "#5a3313",
+                primaryTint: "rgba(107,63,23,0.08)",
+                primaryBorder: "rgba(107,63,23,0.20)",
+                surface: "#ffffff",
+                surface2: "#f8f4ee",
+                border: "#e4d8c8",
+                borderHover: "#cbbba6",
+                text1: "#111827",
+                text2: "#667085",
+                text3: "#98a2b3",
+                overlayBg: "rgba(17, 17, 17, 0.66)",
+                shadowModal:
+                  "0 24px 64px rgba(40,24,12,0.18), 0 0 0 1px rgba(40,24,12,0.05)",
+                shadowImg: "0 8px 32px rgba(40,24,12,0.14)",
+                shadowBtn: "0 4px 16px rgba(107,63,23,0.30)",
+                focusRing: "0 0 0 3px rgba(107,63,23,0.24)",
+              },
+            },
+          );
+          self._selectedVariantId = self.config.selectedVariantId || null;
+          self._tryOnVariantId = null;
+          log("collection try-on — product:", product.id, "handle:", handle);
+          self.openModal();
+        })
+        .catch(function (err) {
+          icon.disabled = false;
+          icon.style.opacity = "";
+          log("collection try-on error:", err && err.message ? err.message : err);
+          self.showToast("Try-on could not load. Please try again.");
+        });
     },
 
     // Ensure a scoped <style> element exists that sets CSS variables for a
@@ -1500,39 +1844,39 @@
     // ══════════════════════════════════════════════════════════════════════
 
     _openFromButton: function (btn) {
-      var variants = [];
-      try {
-        variants = JSON.parse(btn.dataset.variants || "[]");
-      } catch (e) {
-        log("variants parse error:", e.message);
-      }
+      var variants = this._parseJsonDataset(btn.dataset.variants, []);
+      var options = this._parseJsonDataset(btn.dataset.options, []);
+      var clothingImages = this._parseJsonDataset(
+        btn.dataset.clothingImages,
+        {},
+      );
+      var productImages = this._parseJsonDataset(btn.dataset.productImages, []);
 
-      var options = [];
-      try {
-        options = JSON.parse(btn.dataset.options || "[]");
-      } catch (e) {
-        log("options parse error:", e.message);
-      }
-
-      var clothingImages = {};
-      try {
-        clothingImages = JSON.parse(btn.dataset.clothingImages || "{}");
-      } catch (e) {
-        log("clothingImages parse error:", e.message);
-      }
-
-      this.config = {
-        productId: btn.dataset.productId || "",
-        productTitle: btn.dataset.productTitle || "",
-        variants: variants,
-        options: Array.isArray(options) ? options : [],
-        clothingImages: clothingImages,
-        featuredImage: btn.dataset.featuredImage || "",
-        proxyUrl: (btn.dataset.proxyUrl || "").replace(/\/$/, ""),
-        shop: btn.dataset.shop || "",
-        currency: btn.dataset.currency || "INR",
-      };
-      this._selectedVariantId = null;
+      this.config = this._buildTryOnConfig(
+        {
+          id: btn.dataset.productId || "",
+          handle: btn.dataset.productHandle || "",
+          title: btn.dataset.productTitle || "",
+          variants: variants,
+          options: Array.isArray(options) ? options : [],
+          images: productImages,
+          featured_image: btn.dataset.featuredImage || "",
+          url: btn.dataset.storefrontUrl || "",
+        },
+        {
+          productHandle: btn.dataset.productHandle || "",
+          storefrontUrl: btn.dataset.storefrontUrl || "",
+          selectedVariantId:
+            btn.dataset.selectedVariantId || this._getPageVariantId() || "",
+          variantImage: btn.dataset.variantImage || "",
+          clothingImages: clothingImages,
+          featuredImage: btn.dataset.featuredImage || "",
+          proxyUrl: btn.dataset.proxyUrl || "",
+          shop: btn.dataset.shop || "",
+          currency: btn.dataset.currency || "INR",
+        },
+      );
+      this._selectedVariantId = this.config.selectedVariantId || null;
       this._tryOnVariantId = null;
 
       log(
@@ -1613,6 +1957,7 @@
         } catch (ignore) {}
 
       this._renderVariantSelector();
+      this._applyModalPalette(this.config && this.config.modalPalette);
       this._showStep(this._privacySkipped ? "upload" : "privacy");
 
       // Focus close button first (accessibility best practice for dialogs)
@@ -1640,7 +1985,11 @@
       this._stopCountdown();
       this._closeCameraStream();
       this._resetCameraStep();
+      this._buyingNow = false;
+      this._filePickerActive = false;
       this._lastFileTriggerAt = 0; // reset debounce so next modal open works immediately
+      this._selectedVariantId = null;
+      this._tryOnVariantId = null;
 
       // Release object URL held for the processing-step photo preview
       if (this._processingPreviewUrl) {
@@ -1721,10 +2070,18 @@
       }
 
       var pageVariant = this._getPageVariantId();
+      if (!pageVariant && this._selectedVariantId) {
+        pageVariant = String(this._selectedVariantId);
+      }
       if (pageVariant) sel.value = String(pageVariant);
 
       wrap.innerHTML = "";
       wrap.appendChild(sel);
+
+      var self = this;
+      sel.addEventListener("change", function () {
+        self._selectedVariantId = this.value;
+      });
     },
 
     // ══════════════════════════════════════════════════════════════════════
@@ -1732,6 +2089,12 @@
     // ══════════════════════════════════════════════════════════════════════
 
     handlePhotoSelect: function (file) {
+      if (this._tryOnInProgress) {
+        log("handlePhotoSelect — try-on already in progress, ignoring duplicate trigger");
+        return;
+      }
+      this._tryOnInProgress = true;
+
       var allowedTypes = [
         "image/jpeg",
         "image/jpg",
@@ -1758,6 +2121,13 @@
       this._showStep("processing");
       this.showProgress("Resizing your photo…");
 
+      // Pre-reset bar — use setProperty important so theme CSS can't override it.
+      var _bar = document.getElementById("tryfit-progress-bar");
+      if (_bar) {
+        _bar.style.setProperty("transition", "none", "important");
+        _bar.style.setProperty("width", "0%", "important");
+      }
+
       // Show uploaded photo thumbnail in the processing step so the user
       // can see their photo was received while the AI works.
       var prevWrap = document.getElementById("tryfit-processing-preview");
@@ -1783,6 +2153,7 @@
           });
         })
         .catch(function (err) {
+          self._tryOnInProgress = false;
           self._stopProgress();
           self.showError(
             "Something went wrong preparing your photo. Please try again.",
@@ -1944,8 +2315,7 @@
                   }
                   return Promise.reject(
                     new Error(
-                      errBody.error ||
-                        "Server error (" + r.status + "). Please try again.",
+                      errBody.error || "Something went wrong. Please try again.",
                     ),
                   );
                 });
@@ -2015,6 +2385,7 @@
     // ══════════════════════════════════════════════════════════════════════
 
     showResult: function (imageUrl) {
+      this._tryOnInProgress = false;
       var img = document.getElementById("tryfit-result-img");
       if (img) {
         img.src = imageUrl;
@@ -2051,6 +2422,7 @@
     },
 
     showError: function (msg) {
+      this._tryOnInProgress = false;
       var el = document.getElementById("tryfit-error-msg");
       if (el) el.textContent = msg;
       this._showStep("error");
@@ -2076,28 +2448,54 @@
 
     startProgressAnimation: function (durationSeconds) {
       var self = this;
-      this._stopProgress();
-      var bar = document.getElementById("tryfit-progress-bar");
-      if (!bar) return;
-      bar.style.width = "5%";
-      var start = Date.now();
-      var totalMs = durationSeconds * 1000;
-      var wrap = bar.parentElement;
+      console.log("PROGRESS_START:", durationSeconds);
 
-      // Ease-out exponential curve: fast at start, decelerates toward 95%
+      if (this._progressTimer) {
+        clearInterval(this._progressTimer);
+        this._progressTimer = null;
+      }
+
+      var bar = document.getElementById("tryfit-progress-bar");
+      if (!bar) { console.log("PROGRESS_START: bar element not found"); return; }
+
+      // Read merchant color from the JS-applied CSS variable; fall back to indigo.
+      var primary = "#6366f1";
+      var secondary = "#4f46e5";
+      try {
+        var cs = getComputedStyle(document.documentElement);
+        var v1 = cs.getPropertyValue("--tryfit-primary").trim();
+        var v2 = cs.getPropertyValue("--tryfit-primary-hover").trim();
+        if (v1) primary = v1;
+        if (v2) secondary = v2;
+      } catch (ignore) {}
+
+      // Use setProperty("...", "important") for EVERY visual property.
+      // This beats any Shopify theme CSS that uses !important on child divs,
+      // which was causing the bar to stay invisible despite JS width updates.
+      bar.style.setProperty("height", "100%", "important");
+      bar.style.setProperty("border-radius", "100px", "important");
+      bar.style.setProperty("background",
+        "linear-gradient(90deg, " + primary + ", " + secondary + ")", "important");
+      bar.style.setProperty("position", "relative", "important");
+      bar.style.setProperty("transition", "none", "important");
+      // Start at 2% so the filled bar is immediately visible the moment the step shows.
+      bar.style.setProperty("width", "2%", "important");
+
+      console.log("FILLER_WIDTH: starting, color=" + primary);
+
+      var startTime = Date.now();
+      var totalMs = durationSeconds * 1000;
+
       this._progressTimer = setInterval(function () {
-        var elapsed = Date.now() - start;
-        var pct = Math.min(
-          95,
-          Math.round(95 * (1 - Math.exp((-3 * elapsed) / totalMs))),
-        );
-        bar.style.width = pct + "%";
-        if (wrap) wrap.setAttribute("aria-valuenow", pct);
+        var elapsed = Date.now() - startTime;
+        var pct = Math.min(95, Math.round(95 * (1 - Math.exp(-3 * elapsed / totalMs))));
+        bar.style.setProperty("width", pct + "%", "important");
+        console.log("FILLER_WIDTH:", pct);
         if (pct >= 95) {
           clearInterval(self._progressTimer);
           self._progressTimer = null;
         }
-      }, 100);
+      }, 200);
     },
 
     _stopProgress: function () {
@@ -2106,7 +2504,10 @@
         this._progressTimer = null;
       }
       var bar = document.getElementById("tryfit-progress-bar");
-      if (bar) bar.style.width = "100%";
+      if (bar) {
+        bar.style.setProperty("transition", "none", "important");
+        bar.style.setProperty("width", "100%", "important");
+      }
     },
 
     // ══════════════════════════════════════════════════════════════════════
@@ -2116,10 +2517,22 @@
     addToCart: function (variantId, btnEl) {
       var self = this;
       if (self._addingToCart) return;
+
+      var addBtn = btnEl || document.getElementById("tryfit-add-cart");
+      var origText = addBtn ? addBtn.textContent : "Add to Cart";
+
+      function resetBtn(text) {
+        self._addingToCart = false;
+        if (addBtn) {
+          addBtn.disabled = false;
+          addBtn.textContent = text || origText;
+          addBtn.classList.remove("tryfit-btn--loading");
+        }
+      }
+
       self._addingToCart = true;
       this.trackAction("add_to_cart");
 
-      var addBtn = btnEl || document.getElementById("tryfit-add-cart");
       if (addBtn) {
         addBtn.disabled = true;
         addBtn.textContent = "Adding…";
@@ -2142,85 +2555,135 @@
         body: JSON.stringify(cartData),
       })
         .then(function (r) {
-          if (!r.ok)
-            return Promise.reject(new Error("cart/add HTTP " + r.status));
+          if (!r.ok) {
+            return r.json()
+              .catch(function () { return {}; })
+              .then(function (body) {
+                var msg = (body && body.description) ||
+                          (body && body.message) ||
+                          "cart/add HTTP " + r.status;
+                return Promise.reject(new Error(msg));
+              });
+          }
           return r.json();
         })
         .then(function () {
-          self._addingToCart = false;
-          if (addBtn) {
-            addBtn.disabled = false;
-            addBtn.textContent = "Add to Cart";
-            addBtn.classList.remove("tryfit-btn--loading");
-          }
-          self.showToast("✓ Added to cart!");
+          resetBtn(origText);
+          self.showToast("Added to cart!");
           self.closeModal();
           self._openCartDrawer();
         })
         .catch(function (err) {
-          self._addingToCart = false;
-          if (addBtn) {
-            addBtn.disabled = false;
-            addBtn.textContent = "Add to Cart";
-            addBtn.classList.remove("tryfit-btn--loading");
-          }
-          self.showToast("Could not add to cart. Please try again.");
-          log("addToCart error:", err.message);
+          var msg = err && err.message || "";
+          var userMsg = (msg.toLowerCase().indexOf("sold out") !== -1 ||
+                         msg.toLowerCase().indexOf("unavailable") !== -1)
+            ? "This item is sold out or unavailable."
+            : "Could not add to cart. Please try again.";
+          resetBtn(origText);
+          self.showToast(userMsg);
+          log("addToCart error:", msg);
         });
     },
 
     _openCartDrawer: function () {
-      document.dispatchEvent(
-        new CustomEvent("cart:updated", { bubbles: true }),
-      );
-      document.dispatchEvent(new CustomEvent("cart-update", { bubbles: true }));
+      // Fire all standard cart events on both document and window
+      var evtNames = ["cart:updated", "cart-update", "cart:open", "cart:toggle", "cart:refresh"];
+      for (var ei = 0; ei < evtNames.length; ei++) {
+        try {
+          var ce = new CustomEvent(evtNames[ei], { bubbles: true, detail: {} });
+          document.dispatchEvent(ce);
+          window.dispatchEvent(ce);
+        } catch (ignore) {}
+      }
 
+      // Fetch live cart data and fire cart:refresh with detail (Dawn, Impulse, etc.)
       fetch("/cart.js")
-        .then(function (r) {
-          return r.json();
-        })
+        .then(function (r) { return r.json(); })
         .then(function (cart) {
-          document.dispatchEvent(
-            new CustomEvent("cart:refresh", {
+          try {
+            var cartEvt = new CustomEvent("cart:refresh", {
               detail: { cart: cart },
               bubbles: true,
-            }),
-          );
+            });
+            document.dispatchEvent(cartEvt);
+            window.dispatchEvent(cartEvt);
+          } catch (ignore) {}
         })
         .catch(function () {});
 
+      // Theme-specific toggle button selectors (Dawn, Debut, Prestige, Impulse, etc.)
       var selectors = [
         "[data-cart-toggle]",
         '[data-drawer-toggle="cart"]',
         '[aria-controls="CartDrawer"]',
+        '[aria-controls="cart-drawer"]',
         '[aria-controls="cart-notification-product"]',
         ".cart-drawer__toggle",
         '[href="#cart-drawer"]',
+        '[href="#CartDrawer"]',
         ".header__icon--cart",
         '[href="#cart"]',
+        '[data-action="toggle-cart"]',
+        ".cart-toggle",
+        '[data-toggle="cart-drawer"]',
+        ".js-cart-trigger",
+        ".cart-icon-bubble",
+        ".header-cart-toggle",
+        "[data-cart-btn]",
+        ".cart__toggle",
+        "[data-open-cart]",
       ];
       for (var i = 0; i < selectors.length; i++) {
         var el = document.querySelector(selectors[i]);
         if (el && el.getAttribute("aria-expanded") !== "true") {
-          el.click();
+          try { el.click(); } catch (ignore) {}
           return;
         }
       }
 
+      // Custom element API (Dawn theme: <cart-drawer>, <cart-notification>)
       var drawerEl =
         document.querySelector("cart-drawer") ||
         document.querySelector("cart-notification");
-      if (drawerEl && typeof drawerEl.open === "function") drawerEl.open();
+      if (drawerEl) {
+        if (typeof drawerEl.open === "function") {
+          try { drawerEl.open(); return; } catch (ignore) {}
+        }
+        try {
+          drawerEl.classList.add("is-open");
+          drawerEl.removeAttribute("hidden");
+        } catch (ignore) {}
+        return;
+      }
+
+      // Last resort: navigate to cart page if no drawer was found
+      setTimeout(function () {
+        var open = document.querySelector(
+          "cart-drawer.is-open, .cart-drawer.is-open, #CartDrawer.is-open, [data-cart-drawer].is-open"
+        );
+        if (!open) window.location.href = "/cart";
+      }, 400);
     },
 
     buyNow: function (variantId, btnEl) {
-      this.trackAction("buy_now");
       var self = this;
+      if (self._buyingNow) return;
+      self._buyingNow = true;
+      this.trackAction("buy_now");
 
       if (btnEl) {
         btnEl.disabled = true;
         btnEl.textContent = "Loading…";
         btnEl.classList.add("tryfit-btn--loading");
+      }
+
+      function resetBtn() {
+        self._buyingNow = false;
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.textContent = "Buy Now";
+          btnEl.classList.remove("tryfit-btn--loading");
+        }
       }
 
       var cartData = {
@@ -2239,21 +2702,30 @@
         body: JSON.stringify(cartData),
       })
         .then(function (r) {
-          if (!r.ok)
-            return Promise.reject(new Error("cart/add HTTP " + r.status));
+          if (!r.ok) {
+            return r.json()
+              .catch(function () { return {}; })
+              .then(function (body) {
+                return Promise.reject(new Error(
+                  (body && body.description) || "cart/add HTTP " + r.status
+                ));
+              });
+          }
           return r.json();
         })
         .then(function () {
+          // _buyingNow intentionally not reset — we're navigating away
           window.location.href = "/checkout";
         })
         .catch(function (err) {
-          log("buyNow error:", err.message);
-          if (btnEl) {
-            btnEl.disabled = false;
-            btnEl.textContent = "Buy Now";
-            btnEl.classList.remove("tryfit-btn--loading");
-          }
-          self.showToast("Could not complete purchase. Please try again.");
+          resetBtn();
+          var msg = err && err.message || "";
+          var userMsg = (msg.toLowerCase().indexOf("sold out") !== -1 ||
+                         msg.toLowerCase().indexOf("unavailable") !== -1)
+            ? "This item is sold out or unavailable."
+            : "Could not complete purchase. Please try again.";
+          self.showToast(userMsg);
+          log("buyNow error:", msg);
         });
     },
 
@@ -2307,8 +2779,14 @@
       }
 
       function tryFetch() {
-        fetch(url, { mode: "cors" })
+        var ctrl = window.AbortController ? new AbortController() : null;
+        var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 15000) : null;
+        var opts = { mode: "cors" };
+        if (ctrl) opts.signal = ctrl.signal;
+
+        fetch(url, opts)
           .then(function (r) {
+            if (timer) clearTimeout(timer);
             if (!r.ok) throw new Error("HTTP " + r.status);
             return r.blob();
           })
@@ -2316,6 +2794,7 @@
             triggerDownload(blob);
           })
           .catch(function (err) {
+            if (timer) clearTimeout(timer);
             log("saveImage fetch error:", err);
             restoreBtn();
             window.open(url, "_blank", "noopener,noreferrer");
@@ -2355,14 +2834,33 @@
     },
 
     shareWhatsApp: function (imageUrl, productUrl) {
+      // Open blank tab SYNCHRONOUSLY before any async work — popup blockers
+      // reject window.open if it is called after fetch/sendBeacon delay.
+      var newWindow = null;
+      try { newWindow = window.open("", "_blank", "noopener,noreferrer"); } catch (ignore) {}
+
       this.trackAction("share_wa");
-      var shareUrl = imageUrl || productUrl || window.location.href;
-      window.open(
-        "https://wa.me/?text=" +
-          encodeURIComponent("Check this out: " + shareUrl),
-        "_blank",
-        "noopener,noreferrer",
-      );
+
+      var title = (this.config && this.config.productTitle) || "";
+      var pageUrl =
+        productUrl ||
+        (this.config && this.config.storefrontUrl) ||
+        window.location.href;
+
+      var lines = [];
+      if (title) lines.push(title);
+      lines.push(pageUrl);
+      if (imageUrl && imageUrl !== pageUrl && imageUrl.indexOf("http") === 0) {
+        lines.push("My virtual try-on: " + imageUrl);
+      }
+
+      var waUrl = "https://wa.me/?text=" + encodeURIComponent(lines.join("\n"));
+
+      if (newWindow && !newWindow.closed) {
+        newWindow.location.href = waUrl;
+      } else {
+        window.location.href = waUrl;
+      }
     },
 
     // ══════════════════════════════════════════════════════════════════════
@@ -2625,8 +3123,23 @@
 
     _updateAddCartLabel: function () {
       var btn = document.getElementById("tryfit-add-cart");
+      var buyBtn = document.getElementById("tryfit-buy-now");
       if (!btn) return;
+
       var variant = this.getSelectedResultVariant();
+
+      // Sold-out / unavailable variant
+      if (variant && variant.available === false) {
+        btn.textContent = "Sold Out";
+        btn.disabled = true;
+        if (buyBtn) { buyBtn.textContent = "Sold Out"; buyBtn.disabled = true; }
+        return;
+      }
+
+      // Re-enable if a previous selection was sold out
+      btn.disabled = false;
+      if (buyBtn && !this._buyingNow) { buyBtn.textContent = "Buy Now"; buyBtn.disabled = false; }
+
       var price = variant && variant.price;
       if (!price) {
         btn.textContent = "Add to Cart";
@@ -2834,6 +3347,21 @@
         this._facingMode === "user" ? "user" : "environment",
       );
       this._lastFileTriggerAt = Date.now();
+      this._filePickerActive = true;
+
+      var self = this;
+      function releaseCameraPickerMutex() {
+        self._filePickerActive = false;
+        self._lastFileTriggerAt = Date.now();
+        document.removeEventListener("visibilitychange", onCameraPickerVisibility);
+        clearTimeout(cameraPickerFailsafe);
+      }
+      function onCameraPickerVisibility() {
+        if (!document.hidden) { releaseCameraPickerMutex(); }
+      }
+      document.addEventListener("visibilitychange", onCameraPickerVisibility);
+      var cameraPickerFailsafe = setTimeout(releaseCameraPickerMutex, 30000);
+
       inp.click();
       setTimeout(function () {
         try {

@@ -2,8 +2,14 @@
  * PHP API client — server-side only.
  * baseUrl and apiKey are never exposed to the client bundle.
  * Named .server.js so React Router excludes it from the browser bundle.
+ *
+ * Every request carries both:
+ *   X-Api-Key: <per-shop merchant key>   — for PHP to resolve the merchant
+ *   X-Shop-Domain: <shop domain>         — explicit fallback so PHP can always
+ *                                          scope data to the correct shop even
+ *                                          if the api_key lookup fails
  */
-export default function phpApiClient(apiKey, baseUrl) {
+export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
   const base = baseUrl.replace(/\/$/, '');
 
   async function request(method, path, body = null, timeoutMs = 10_000) {
@@ -11,20 +17,29 @@ export default function phpApiClient(apiKey, baseUrl) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const init = {
-        method,
-        headers: {
-          'X-Api-Key': apiKey,
-          'Content-Type': 'application/json',
-        },
-        signal: controller.signal,
+      const headers = {
+        'X-Api-Key': apiKey,
+        'Content-Type': 'application/json',
       };
+
+      if (shopDomain) {
+        headers['X-Shop-Domain'] = shopDomain;
+      }
+
+      const init = { method, headers, signal: controller.signal };
 
       if (body !== null) {
         init.body = JSON.stringify(body);
       }
 
-      const res = await fetch(`${base}${path}`, init);
+      // Append shop as query param on GET requests for extra scoping
+      let url = `${base}${path}`;
+      if (shopDomain && method === 'GET' && !path.includes('shop=')) {
+        const sep = path.includes('?') ? '&' : '?';
+        url = `${url}${sep}shop=${encodeURIComponent(shopDomain)}`;
+      }
+
+      const res = await fetch(url, init);
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {

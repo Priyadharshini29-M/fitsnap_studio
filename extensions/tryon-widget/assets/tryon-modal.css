@@ -15,22 +15,22 @@
 /* ── Design tokens ───────────────────────────────────────────────────────── */
 :root {
   /* Brand accent — JS overrides these with merchant settings */
-  --tryfit-primary:        #6366f1;
+  --tryfit-primary:        #6b3f17;
   --tryfit-primary-fg:     #ffffff;
-  --tryfit-primary-hover:  #4f46e5;
-  --tryfit-primary-tint:   rgba(99,102,241,0.08);
-  --tryfit-primary-border: rgba(99,102,241,0.20);
+  --tryfit-primary-hover:  #5a3313;
+  --tryfit-primary-tint:   rgba(107,63,23,0.08);
+  --tryfit-primary-border: rgba(107,63,23,0.20);
 
   /* Surface & layout */
   --tryfit-surface:        #ffffff;
-  --tryfit-surface-2:      #f8fafc;
-  --tryfit-border:         #e8ecf0;
-  --tryfit-border-hover:   #c7cdd8;
+  --tryfit-surface-2:      #f8f4ee;
+  --tryfit-border:         #e4d8c8;
+  --tryfit-border-hover:   #cbbba6;
 
   /* Typography */
-  --tryfit-text-1:         #0f172a;
-  --tryfit-text-2:         #64748b;
-  --tryfit-text-3:         #94a3b8;
+  --tryfit-text-1:         #111827;
+  --tryfit-text-2:         #667085;
+  --tryfit-text-3:         #98a2b3;
 
   /* Shape */
   --tryfit-radius:         20px;    /* modal card corners */
@@ -39,16 +39,16 @@
   --tryfit-radius-xs:      8px;
 
   /* Shadow system */
-  --tryfit-shadow-modal:   0 24px 64px rgba(15,23,42,0.18), 0 0 0 1px rgba(15,23,42,0.04);
-  --tryfit-shadow-img:     0 8px 32px rgba(15,23,42,0.14);
-  --tryfit-shadow-btn:     0 4px 16px rgba(99,102,241,0.30);
+  --tryfit-shadow-modal:   0 24px 64px rgba(40,24,12,0.18), 0 0 0 1px rgba(40,24,12,0.05);
+  --tryfit-shadow-img:     0 8px 32px rgba(40,24,12,0.14);
+  --tryfit-shadow-btn:     0 4px 16px rgba(107,63,23,0.30);
 
   /* Interaction */
-  --tryfit-focus-ring:     0 0 0 3px rgba(99,102,241,0.30);
+  --tryfit-focus-ring:     0 0 0 3px rgba(107,63,23,0.24);
   --tryfit-transition:     0.18s cubic-bezier(0.4, 0, 0.2, 1);
 
   /* Overlay */
-  --tryfit-overlay-bg:     rgba(15, 23, 42, 0.70);
+  --tryfit-overlay-bg:     rgba(17, 17, 17, 0.66);
 
   /* Font */
   --tryfit-font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
@@ -508,7 +508,7 @@
 .tryfit-progress-bar-wrap {
   width:         100%;
   height:        6px;
-  background:    var(--tryfit-border);
+  background:    #e2e8f0;
   border-radius: 100px;
   overflow:      hidden;
   margin-bottom: 12px;
@@ -516,12 +516,14 @@
 
 .tryfit-progress-bar {
   height:        100%;
+  width:         0%;
   border-radius: 100px;
-  background:    linear-gradient(90deg, var(--tryfit-primary), var(--tryfit-primary-hover, #4f46e5));
-  transition:    width 0.35s ease;
-  will-change:   width;
+  /* Hardcoded fallback so the bar is visible even before JS sets the CSS var */
+  background:    #6366f1;
+  background:    linear-gradient(90deg, var(--tryfit-primary, #6366f1), var(--tryfit-primary-hover, #4f46e5));
   position:      relative;
   overflow:      hidden;
+  will-change:   width;
 }
 
 /* Shimmer sweep on the progress bar */
@@ -545,7 +547,15 @@
    ════════════════════════════════════════════════════════════════════════════ */
 .tryfit-result-inner {
   align-items: stretch;
-  padding:     0 0 28px;
+  padding:     0;
+}
+
+/* Right panel on desktop — scrolls independently when content overflows */
+.tryfit-result-panel {
+  display:        flex;
+  flex-direction: column;
+  flex:           1;
+  min-width:      0;
 }
 
 /* Hero image frame */
@@ -582,15 +592,15 @@
 }
 
 .tryfit-result-product-title {
-  font-size:    13px;
+  font-size:    12px;
   font-weight:  600;
   color:        var(--tryfit-text-2);
-  text-align:   center;
+  text-align:   left;
   margin:       0;
   white-space:  nowrap;
   overflow:     hidden;
   text-overflow: ellipsis;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -660,13 +670,7 @@
   .tryfit-result-content        { padding: 0 20px 4px; }
 }
 
-.tryfit-result-caption {
-  font-size:   14px;
-  font-weight: 600;
-  color:       var(--tryfit-text-1);
-  margin:      12px 0 14px;
-  text-align:  center;
-}
+.tryfit-result-caption { display: none; }
 
 /* Coupon card */
 .tryfit-coupon-card {
@@ -855,7 +859,10 @@
   align-items:     center;
   justify-content: space-between;
   gap:             12px;
+  padding:         12px 0;
   margin-bottom:   14px;
+  border-top:      1px solid var(--tryfit-border);
+  border-bottom:   1px solid var(--tryfit-border);
 }
 
 .tryfit-qty-control {
@@ -917,12 +924,12 @@
 
 /* Re-upload row */
 .tryfit-reupload-row {
-  display:       flex;
-  align-items:   center;
+  display:         flex;
+  align-items:     center;
   justify-content: center;
-  gap:           10px;
-  margin-top:    10px;
-  margin-bottom: 12px;
+  gap:             4px;
+  margin-top:      10px;
+  margin-bottom:   10px;
 }
 
 .tryfit-reupload-btn {
@@ -930,63 +937,78 @@
   align-items:     center;
   justify-content: center;
   gap:             5px;
-  padding:         8px 16px;
-  border:          1.5px solid var(--tryfit-border);
+  padding:         6px 10px;
+  border:          none;
   border-radius:   var(--tryfit-radius-xs);
-  background:      var(--tryfit-surface-2);
+  background:      transparent;
   color:           var(--tryfit-text-2);
   font-size:       12px;
-  font-weight:     600;
+  font-weight:     500;
   cursor:          pointer;
   pointer-events:  auto !important;
-  transition:      border-color var(--tryfit-transition), color var(--tryfit-transition),
-                   background var(--tryfit-transition);
+  transition:      color var(--tryfit-transition);
   white-space:     nowrap;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: transparent;
 }
 
 .tryfit-reupload-btn:hover:not(:disabled) {
-  border-color: var(--tryfit-border-hover);
-  color:        var(--tryfit-text-1);
-  background:   var(--tryfit-border);
+  color:                  var(--tryfit-text-1);
+  text-decoration-color:  var(--tryfit-border-hover);
 }
 
 .tryfit-reupload-btn:focus-visible { outline: none; box-shadow: var(--tryfit-focus-ring); }
+
+.tryfit-reupload-sep {
+  color:          var(--tryfit-text-3);
+  font-size:      14px;
+  line-height:    1;
+  pointer-events: none;
+  user-select:    none;
+}
 
 /* Primary CTA stack */
 .tryfit-result-ctas {
   display:        flex;
   flex-direction: column;
-  gap:            10px;
-  margin-bottom:  12px;
+  gap:            8px;
+  margin-bottom:  14px;
 }
 
-/* Secondary action row */
+/* Tier divider between primary and tertiary actions */
+.tryfit-result-divider {
+  height:      1px;
+  background:  var(--tryfit-border);
+  margin:      2px 0 12px;
+  flex-shrink: 0;
+}
+
+/* Secondary action row — compact 2-column grid */
 .tryfit-result-secondary {
-  display:         flex;
-  align-items:     stretch;
-  justify-content: center;
-  gap:             8px;
-  margin-bottom:   12px;
+  display:               grid;
+  grid-template-columns: 1fr 1fr;
+  gap:                   8px;
+  margin-bottom:         10px;
 }
 
 .tryfit-result-action {
   display:         inline-flex;
   align-items:     center;
   justify-content: center;
-  gap:             6px;
-  font-size:       13px;
+  gap:             5px;
+  font-size:       12px;
   font-weight:     600;
   color:           var(--tryfit-text-1) !important;
   background:      var(--tryfit-surface-2) !important;
   border:          1.5px solid var(--tryfit-border) !important;
   cursor:          pointer;
   pointer-events:  auto !important;
-  padding:         10px 16px;
+  padding:         8px 12px;
   border-radius:   var(--tryfit-radius-xs);
   transition:      background var(--tryfit-transition), border-color var(--tryfit-transition),
                    color var(--tryfit-transition), box-shadow var(--tryfit-transition);
-  flex:            1;
-  min-height:      42px;
+  min-height:      36px;
   white-space:     nowrap;
   box-sizing:      border-box;
 }
@@ -1227,6 +1249,7 @@
   100% { transform: translateX(300%);  }
 }
 
+
 /* Respect reduced-motion preferences */
 @media (prefers-reduced-motion: reduce) {
   .tryfit-privacy-ring,
@@ -1447,20 +1470,6 @@
   display:    block;
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   RESULT CTAs — 2-COLUMN GRID
-   ════════════════════════════════════════════════════════════════════════════ */
-.tryfit-result-ctas {
-  display:               grid;
-  grid-template-columns: 1fr 1fr;
-  gap:                   8px;
-  margin-bottom:         10px;
-}
-
-.tryfit-result-ctas .tryfit-btn {
-  width:     100%;
-  min-width: 0;
-}
 
 /* ════════════════════════════════════════════════════════════════════════════
    SAVE BUTTON SPINNER
@@ -1558,8 +1567,7 @@
   .tryfit-result-secondary       { gap: 6px; }
 
   /* Section margins */
-  .tryfit-result-caption   { margin: 8px 0 10px; }
-  .tryfit-qty-price-row    { margin-bottom: 10px; }
+  .tryfit-qty-price-row    { margin-bottom: 10px; padding: 10px 0; }
   .tryfit-coupon-card      { margin-bottom: 10px; padding: 10px 12px; }
   .tryfit-reupload-row     { margin-top: 8px; margin-bottom: 8px; }
   .tryfit-step-header      { margin-bottom: 14px; }
@@ -1627,17 +1635,17 @@
   }
 
   .tryfit-result-action {
-    padding:    9px 10px;
+    padding:    7px 10px;
     font-size:  12px;
-    min-height: 40px;
+    min-height: 34px;
   }
 
-  .tryfit-result-ctas     { gap: 6px; }
+  .tryfit-result-ctas      { gap: 6px; }
   .tryfit-result-secondary { gap: 6px; }
 
   .tryfit-reupload-btn {
     font-size: 12px;
-    padding:   8px 14px;
+    padding:   5px 8px;
   }
 
   .tryfit-watermark {
@@ -1655,11 +1663,11 @@
     padding: 24px;
   }
 
-  /* ── Expand modal to 680 px ── */
+  /* ── Expand modal to 700 px for two-column result layout ── */
   .tryfit-modal {
-    width:      min(100%, 680px);
-    max-width:  680px;
-    max-height: calc(100svh - 48px);
+    width:      min(100%, 700px);
+    max-width:  700px;
+    max-height: min(90vh, 640px);
   }
 
   .tryfit-step-inner {
@@ -1669,10 +1677,9 @@
   /* ── Fluid typography ── */
   .tryfit-heading         { font-size: clamp(22px, 3vw, 26px); }
   .tryfit-subheading      { font-size: 15px; }
-  .tryfit-result-caption  { font-size: 15px; }
 
   .tryfit-result-product-title {
-    font-size:  14px;
+    font-size:  12px;
     text-align: left;
   }
 
@@ -1708,69 +1715,45 @@
     min-height: 48px;
   }
 
-  .tryfit-result-action {
-    padding:    11px 18px;
-    font-size:  13px;
-    min-height: 44px;
-  }
+  .tryfit-result-ctas { gap: 8px; }
 
-  .tryfit-result-secondary {
-    justify-content: flex-start;
-  }
-
-  .tryfit-reupload-btn {
-    padding:    10px 20px;
-    min-height: 44px;
-  }
-
-  .tryfit-result-ctas { gap: 10px; }
-
-  /* ── Two-column result grid ── */
+  /* ── Two-column result layout ── */
   .tryfit-result-inner {
-    display:               grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      "img hdr"
-      "img cnt"
-      "img bdy";
-    align-items:   start;
-    padding:       0;
-    gap:           0;
+    flex-direction: row;
+    padding:        0;
   }
 
-  /* Image — left column, fills full grid height */
+  /* Image — left column, stretches to fill panel height */
   .tryfit-result-frame {
-    grid-area:     img;
+    width:         42%;
+    flex-shrink:   0;
     aspect-ratio:  unset;
-    width:         100%;
-    height:        100%;
-    min-height:    360px;
+    height:        auto;
+    min-height:    380px;
     max-height:    unset;
     align-self:    stretch;
     border-radius: var(--tryfit-radius) 0 0 var(--tryfit-radius);
     margin-bottom: 0;
   }
 
-  /* Image — center within the stretched frame */
+  /* Image — center vertically within the stretched frame */
   .tryfit-result-img {
     object-position: center center;
   }
 
-  /* Right column — header */
-  .tryfit-result-product-header {
-    grid-area: hdr;
-    padding:   20px 24px 6px;
+  /* Right panel — fills remaining width, scrolls if needed */
+  .tryfit-result-panel {
+    overflow-y: auto;
   }
 
-  /* Right column — countdown banner */
-  .tryfit-countdown-banner {
-    grid-area: cnt;
+  /* Right column — header */
+  .tryfit-result-product-header {
+    padding: 20px 24px 6px;
   }
 
   /* Right column — all controls */
   .tryfit-result-content {
-    grid-area: bdy;
-    padding:   8px 24px 24px;
+    padding: 8px 24px 20px;
   }
 }
 
@@ -1783,11 +1766,11 @@
     padding: 32px;
   }
 
-  /* ── Desktop modal: compact medium size ── */
+  /* ── Desktop modal: wider for two-column result layout ── */
   .tryfit-modal {
-    width:      min(100%, 640px);
-    max-width:  640px;
-    max-height: min(80vh, 700px);
+    width:      min(100%, 720px);
+    max-width:  720px;
+    max-height: min(85vh, 660px);
   }
 
   .tryfit-step-inner {
@@ -1815,20 +1798,18 @@
   }
 
   .tryfit-result-action {
-    padding:    11px 18px;
-    font-size:  13px;
-    min-height: 46px;
+    padding:    8px 12px;
+    font-size:  12px;
+    min-height: 36px;
   }
 
   .tryfit-reupload-btn {
-    padding:    10px 20px;
-    font-size:  13px;
-    min-height: 44px;
+    font-size: 12px;
   }
 
-  /* Result grid — compact padding on desktop */
+  /* Result — extend frame for taller modal */
   .tryfit-result-frame {
-    min-height: 320px;
+    min-height: 400px;
   }
 
   .tryfit-result-product-header {
@@ -1844,7 +1825,7 @@
     font-size: 12px;
   }
 
-  .tryfit-result-product-title { font-size: 14px; }
+  .tryfit-result-product-title { font-size: 12px; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

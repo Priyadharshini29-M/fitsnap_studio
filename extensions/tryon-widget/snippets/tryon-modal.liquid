@@ -98,10 +98,11 @@
         <div id="tryfit-variant-selector" class="tryfit-variant-selector" role="group" aria-label="Select product variant"></div>
 
         <label
-          for="tryfit-file-input"
           id="tryfit-upload-label"
           class="tryfit-upload-label"
           aria-label="Upload your photo — click, tap, or drag and drop"
+          role="button"
+          tabindex="0"
         >
           <div class="tryfit-upload-icon-wrap" aria-hidden="true">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -328,12 +329,7 @@
     <div id="tryfit-step-result" class="tryfit-step" style="display:none;">
       <div class="tryfit-step-inner tryfit-result-inner">
 
-        <!-- Product title header -->
-        <div class="tryfit-result-product-header">
-          <p id="tryfit-result-product-title" class="tryfit-result-product-title"></p>
-        </div>
-
-        <!-- Full-bleed result image -->
+        <!-- Full-bleed result image (left panel on desktop) -->
         <div class="tryfit-result-frame">
           <img
             id="tryfit-result-img"
@@ -355,142 +351,154 @@
           </button>
         </div>
 
-        <!-- Countdown urgency banner -->
-        <div id="tryfit-countdown-banner" class="tryfit-countdown-banner" aria-live="polite" aria-atomic="true">
-          <span class="tryfit-countdown-icon" aria-hidden="true">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-            </svg>
-          </span>
-          <span class="tryfit-countdown-text">
-            Your look is ready! Decide in <strong id="tryfit-countdown-value">10:00</strong>
-          </span>
-        </div>
+        <!-- Right panel: product header + countdown + purchase controls -->
+        <div class="tryfit-result-panel">
 
-        <!-- Padded content wrapper -->
-        <div class="tryfit-result-content">
+          <!-- Product title header -->
+          <div class="tryfit-result-product-header">
+            <p id="tryfit-result-product-title" class="tryfit-result-product-title"></p>
+          </div>
 
-          <!-- Coupon card (shown by JS when coupon_code in settings) -->
-          <div id="tryfit-coupon-card" class="tryfit-coupon-card" style="display:none;" aria-label="Exclusive discount coupon">
-            <div class="tryfit-coupon-label">Your exclusive discount</div>
-            <div class="tryfit-coupon-row">
-              <span id="tryfit-coupon-code" class="tryfit-coupon-code"></span>
-              <button
-                type="button"
-                id="tryfit-copy-coupon"
-                class="tryfit-coupon-copy"
-                data-tryfit-action="copy-coupon"
-                aria-label="Copy coupon code"
-              >Copy</button>
+          <!-- Countdown urgency banner -->
+          <div id="tryfit-countdown-banner" class="tryfit-countdown-banner" aria-live="polite" aria-atomic="true">
+            <span class="tryfit-countdown-icon" aria-hidden="true">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </span>
+            <span class="tryfit-countdown-text">
+              <span id="tryfit-countdown-prefix">Your look is ready! Decide in </span><strong id="tryfit-countdown-value">10:00</strong>
+            </span>
+          </div>
+
+          <!-- Padded content wrapper -->
+          <div class="tryfit-result-content">
+
+            <!-- Coupon card (shown by JS when coupon_code in settings) -->
+            <div id="tryfit-coupon-card" class="tryfit-coupon-card" style="display:none;" aria-label="Exclusive discount coupon">
+              <div class="tryfit-coupon-label">Your exclusive discount</div>
+              <div class="tryfit-coupon-row">
+                <span id="tryfit-coupon-code" class="tryfit-coupon-code"></span>
+                <button
+                  type="button"
+                  id="tryfit-copy-coupon"
+                  class="tryfit-coupon-copy"
+                  data-tryfit-action="copy-coupon"
+                  aria-label="Copy coupon code"
+                >Copy</button>
+              </div>
             </div>
-          </div>
 
-          <!-- Variant chip grid (result step) -->
-          <div
-            id="tryfit-result-variant-selector"
-            class="tryfit-result-variant-selector"
-            role="group"
-            aria-label="Select variant"
-          ></div>
-          <div id="tryfit-option-groups" class="tryfit-option-groups" aria-label="Variant options"></div>
-          <select id="tryfit-variant-select" class="tryfit-variant-select" aria-hidden="true"></select>
+            <!-- Variant chip grid (result step) -->
+            <div
+              id="tryfit-result-variant-selector"
+              class="tryfit-result-variant-selector"
+              role="group"
+              aria-label="Select variant"
+            ></div>
+            <div id="tryfit-option-groups" class="tryfit-option-groups" aria-label="Variant options"></div>
+            <select id="tryfit-variant-select" class="tryfit-variant-select" aria-hidden="true"></select>
 
-          <!-- Quantity + price row -->
-          <div class="tryfit-qty-price-row">
-            <div class="tryfit-qty-control" role="group" aria-label="Quantity">
-              <button
-                type="button"
-                class="tryfit-qty-btn"
-                data-tryfit-action="qty-dec"
-                aria-label="Decrease quantity"
-              >&#8722;</button>
-              <span id="tryfit-qty-display" class="tryfit-qty-display" aria-live="polite">1</span>
-              <button
-                type="button"
-                class="tryfit-qty-btn"
-                data-tryfit-action="qty-inc"
-                aria-label="Increase quantity"
-              >&#43;</button>
+            <!-- Quantity + price row -->
+            <div class="tryfit-qty-price-row">
+              <div class="tryfit-qty-control" role="group" aria-label="Quantity">
+                <button
+                  type="button"
+                  class="tryfit-qty-btn"
+                  data-tryfit-action="qty-dec"
+                  aria-label="Decrease quantity"
+                >&#8722;</button>
+                <span id="tryfit-qty-display" class="tryfit-qty-display" aria-live="polite">1</span>
+                <button
+                  type="button"
+                  class="tryfit-qty-btn"
+                  data-tryfit-action="qty-inc"
+                  aria-label="Increase quantity"
+                >&#43;</button>
+              </div>
+              <div id="tryfit-price-display" class="tryfit-price-display" aria-live="polite"></div>
             </div>
-            <div id="tryfit-price-display" class="tryfit-price-display" aria-live="polite"></div>
-          </div>
 
-          <p class="tryfit-result-caption">Looking great on you!</p>
+            <!-- Primary CTAs: Add to Cart (full-width) · Buy Now (full-width outline) -->
+            <div class="tryfit-result-ctas">
+              <button
+                type="button"
+                id="tryfit-add-cart"
+                class="tryfit-btn tryfit-btn--primary"
+                data-tryfit-action="add-cart"
+              >Add to Cart</button>
+              <button
+                type="button"
+                id="tryfit-buy-now"
+                class="tryfit-btn tryfit-btn--secondary"
+                data-tryfit-action="buy-now"
+              >Buy Now</button>
+            </div>
 
-          <!-- Primary CTAs — 2-column grid: Add to Cart · Buy Now -->
-          <div class="tryfit-result-ctas">
-            <button
-              type="button"
-              id="tryfit-add-cart"
-              class="tryfit-btn tryfit-btn--primary"
-              data-tryfit-action="add-cart"
-            >Add to Cart</button>
-            <button
-              type="button"
-              id="tryfit-buy-now"
-              class="tryfit-btn tryfit-btn--secondary"
-              data-tryfit-action="buy-now"
-            >Buy Now</button>
-          </div>
+            <!-- Tier divider -->
+            <div class="tryfit-result-divider" aria-hidden="true"></div>
 
-          <!-- Secondary actions — 2-column grid: Save · WhatsApp -->
-          <div class="tryfit-result-secondary">
-            <button
-              type="button"
-              id="tryfit-save-img"
-              class="tryfit-result-action"
-              data-tryfit-action="save-img"
-              aria-label="Save try-on result image to device"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
-              Save
-            </button>
-            <button
-              type="button"
-              id="tryfit-share-wa"
-              class="tryfit-result-action tryfit-result-action--wa"
-              data-tryfit-action="share-wa"
-              aria-label="Share result on WhatsApp"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-                <path d="M12 0C5.373 0 0 5.373 0 12c0 2.117.553 4.103 1.518 5.829L0 24l6.335-1.509A11.951 11.951 0 0 0 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.818 9.818 0 0 1-5.006-1.371l-.359-.214-3.724.977.994-3.633-.234-.374A9.818 9.818 0 1 1 12 21.818z"/>
-              </svg>
-              Share on WhatsApp
-            </button>
-          </div>
+            <!-- Secondary actions: Save · WhatsApp -->
+            <div class="tryfit-result-secondary">
+              <button
+                type="button"
+                id="tryfit-save-img"
+                class="tryfit-result-action"
+                data-tryfit-action="save-img"
+                aria-label="Save try-on result image to device"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Save
+              </button>
+              <button
+                type="button"
+                id="tryfit-share-wa"
+                class="tryfit-result-action tryfit-result-action--wa"
+                data-tryfit-action="share-wa"
+                aria-label="Share result on WhatsApp"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+                  <path d="M12 0C5.373 0 0 5.373 0 12c0 2.117.553 4.103 1.518 5.829L0 24l6.335-1.509A11.951 11.951 0 0 0 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.818 9.818 0 0 1-5.006-1.371l-.359-.214-3.724.977.994-3.633-.234-.374A9.818 9.818 0 1 1 12 21.818z"/>
+                </svg>
+                Share on WhatsApp
+              </button>
+            </div>
 
-          <!-- Re-upload row (gallery + camera) -->
-          <div class="tryfit-reupload-row">
-            <button
-              type="button"
-              class="tryfit-reupload-btn"
-              data-tryfit-action="gallery-upload"
-              aria-label="Upload new photo from gallery"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-              </svg>
-              Gallery
-            </button>
-            <button
-              type="button"
-              class="tryfit-reupload-btn"
-              data-tryfit-action="camera-upload"
-              aria-label="Take a new photo with camera"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
-              </svg>
-              Camera
-            </button>
-          </div>
+            <!-- Re-upload row: Gallery · Camera -->
+            <div class="tryfit-reupload-row">
+              <button
+                type="button"
+                class="tryfit-reupload-btn"
+                data-tryfit-action="gallery-upload"
+                aria-label="Upload new photo from gallery"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                Gallery
+              </button>
+              <span class="tryfit-reupload-sep" aria-hidden="true">·</span>
+              <button
+                type="button"
+                class="tryfit-reupload-btn"
+                data-tryfit-action="camera-upload"
+                aria-label="Take a new photo with camera"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
+                </svg>
+                Camera
+              </button>
+            </div>
 
-          <p class="tryfit-watermark">Powered by FitSnap</p>
+            <p class="tryfit-watermark">Powered by FitSnap</p>
 
-        </div><!-- /.tryfit-result-content -->
+          </div><!-- /.tryfit-result-content -->
+
+        </div><!-- /.tryfit-result-panel -->
 
       </div>
     </div>

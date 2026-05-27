@@ -64,24 +64,21 @@ export async function action({ request }) {
 
     console.log("[SAVE] shop:", session.shop, "| apiKey:", apiKey?.slice(0, 8), "| PHP_API_URL:", PHP_API_URL);
 
-    const api = phpApiClient(apiKey, PHP_API_URL);
+    const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
     const res = await api.saveSettings(body);
 
     console.log("[SAVE] PHP ok:", res.ok, "| status:", res.status, "| error:", res.error);
 
     if (!res.ok) {
-      return Response.json(
-        { ok: false, error: res.error ?? "Save failed — check PHP logs" },
-        { status: 500 }
-      );
+      console.error("[SAVE] PHP rejected save:", res.status, res.error);
+      // Return 200 so React Router does not trigger the error boundary;
+      // the settings page reads ok/error from the JSON body.
+      return Response.json({ ok: false, error: res.error ?? "Save failed. Please try again." });
     }
 
     return Response.json({ ok: true, data: res.data ?? null, _t: Date.now() });
   } catch (err) {
     console.error("[SAVE] Unhandled error:", err);
-    return Response.json(
-      { ok: false, error: err?.message ?? "Unexpected error" },
-      { status: 500 }
-    );
+    return Response.json({ ok: false, error: err?.message ?? "Unexpected server error. Please try again." });
   }
 }

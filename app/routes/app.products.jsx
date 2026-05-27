@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { useLoaderData, useSubmit, useNavigate, useNavigation } from "react-router";
-import { Page, Text, Button, Icon } from "@shopify/polaris";
+import { useLoaderData, useSubmit, useNavigate, useNavigation, useActionData } from "react-router";
+import { Page, Text, Button, Icon, Banner } from "@shopify/polaris";
 import {
   SearchIcon,
   ProductIcon,
@@ -74,7 +74,7 @@ export async function loader({ request }) {
 
   const [collectionsRes, phpRes] = await Promise.all([
     admin.graphql(COLLECTIONS_QUERY, { variables: { first: 30 } }),
-    phpApiClient(apiKey, PHP_API_URL).getProducts(),
+    phpApiClient(apiKey, PHP_API_URL, shop).getProducts(),
   ]);
 
   const collectionsData = await collectionsRes.json();
@@ -157,17 +157,33 @@ export async function action({ request }) {
   const apiKey = await ensureMerchant(session);
   const formData = await request.formData();
   const intent = formData.get("intent");
-  const api = phpApiClient(apiKey, PHP_API_URL);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
+
+  function safeJsonParse(raw, fallback = null) {
+    if (!raw) return fallback;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return fallback;
+    }
+  }
 
   if (intent === "toggle_product") {
     const shopifyProductId  = formData.get("shopify_product_id");
     const shopifyProductGid = formData.get("shopify_product_gid");
     const enabled           = formData.get("enabled") === "true";
+    const title             = formData.get("title")        || null;
+    const handle            = formData.get("handle")       || null;
+    const vendor            = formData.get("vendor")       || null;
+    const productType       = formData.get("product_type") || null;
+    const featuredImage     = formData.get("featured_image") || null;
+    const price             = formData.get("price")        || null;
+    const currency          = formData.get("currency")     || null;
     const collectionId      = formData.get("collection_id")     || null;
     const collectionTitle   = formData.get("collection_title")  || null;
     const collectionHandle  = formData.get("collection_handle") || null;
     const collectionProductsRaw = formData.get("collection_products");
-    const collectionProducts   = collectionProductsRaw ? JSON.parse(collectionProductsRaw) : null;
+    const collectionProducts   = safeJsonParse(collectionProductsRaw, null);
 
     // Fetch variants for this product directly (kept out of page-load query to reduce cost)
     const varRes = await admin.graphql(PRODUCT_VARIANTS_QUERY, { variables: { id: shopifyProductGid } });
@@ -182,9 +198,16 @@ export async function action({ request }) {
       options:             e.node.selectedOptions ?? [],
     }));
 
-    await api.syncProduct({
+    const syncRes = await api.syncProduct({
       shopify_product_id:  shopifyProductId,
       shopify_product_gid: shopifyProductGid,
+      title,
+      handle,
+      vendor,
+      product_type:        productType,
+      featured_image:      featuredImage,
+      price,
+      currency,
       collection_id:       collectionId,
       collection_title:    collectionTitle,
       collection_handle:   collectionHandle,
@@ -193,10 +216,20 @@ export async function action({ request }) {
       is_tryon_enabled:    enabled ? 1 : 0,
     });
 
-    await admin.graphql(
+    if (!syncRes.ok) {
+      return new Response(
+        JSON.stringify({ ok: false, error: syncRes.error || "Failed to sync product state" }),
+        { status: 502, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    const metafieldRes = await admin.graphql(
       `#graphql
         mutation SetTryonMetafield($input: ProductInput!) {
-          productUpdate(input: $input) { product { id } }
+          productUpdate(input: $input) {
+            product { id }
+            userErrors { field message }
+          }
         }
       `,
       {
@@ -214,6 +247,15 @@ export async function action({ request }) {
       }
     );
 
+    const metafieldData = await metafieldRes.json();
+    const metafieldErrors = metafieldData.data?.productUpdate?.userErrors ?? [];
+    if (metafieldErrors.length > 0) {
+      return new Response(
+        JSON.stringify({ ok: false, error: `Metafield update failed: ${metafieldErrors[0].message}` }),
+        { status: 502, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     return { ok: true };
   }
 
@@ -221,7 +263,7 @@ export async function action({ request }) {
     const collectionGid = formData.get("collection_gid");
     const enabled = formData.get("enabled") === "true";
     const productsJson = formData.get("products_json");
-    const products = productsJson ? JSON.parse(productsJson) : [];
+    const products = safeJsonParse(productsJson, []);
 
     // Update collection metafield
     await admin.graphql(
@@ -251,44 +293,70 @@ export async function action({ request }) {
     const collectionHandle = formData.get("collection_handle") || null;
 
     const collectionProductsRaw = formData.get("collection_products");
-    const collectionProducts    = collectionProductsRaw ? JSON.parse(collectionProductsRaw) : null;
+    const collectionProducts    = safeJsonParse(collectionProductsRaw, null);
 
-    await Promise.allSettled(
-      products.map(p =>
-        Promise.allSettled([
-          api.syncProduct({
-            shopify_product_id:  p.numericId,
-            shopify_product_gid: p.id,
-            collection_id:       collectionId,
-            collection_title:    collectionTitle,
-            collection_handle:   collectionHandle,
-            collection_products: collectionProducts,
-            shopify_variants:    null,
-            is_tryon_enabled:    enabled ? 1 : 0,
-          }),
-          admin.graphql(
-            `#graphql
-              mutation SetProductTryonMetafield($input: ProductInput!) {
-                productUpdate(input: $input) { product { id } }
+    const bulkResults = await Promise.allSettled(
+      products.map(async p => {
+        const syncRes = await api.syncProduct({
+          shopify_product_id:  p.numericId,
+          shopify_product_gid: p.id,
+          title:               p.title ?? null,
+          handle:              p.handle ?? null,
+          vendor:              p.vendor ?? null,
+          product_type:        p.productType ?? null,
+          featured_image:      p.featuredImage ?? null,
+          price:               p.price ?? null,
+          currency:            p.currency ?? null,
+          collection_id:       collectionId,
+          collection_title:    collectionTitle,
+          collection_handle:   collectionHandle,
+          collection_products: collectionProducts,
+          shopify_variants:    null,
+          is_tryon_enabled:    enabled ? 1 : 0,
+        });
+
+        if (!syncRes.ok) {
+          throw new Error(syncRes.error || `Failed syncing product ${p.numericId}`);
+        }
+
+        const bulkMetafieldRes = await admin.graphql(
+          `#graphql
+            mutation SetProductTryonMetafield($input: ProductInput!) {
+              productUpdate(input: $input) {
+                product { id }
+                userErrors { field message }
               }
-            `,
-            {
-              variables: {
-                input: {
-                  id: p.id,
-                  metafields: [{
-                    namespace: "tryfit",
-                    key: "tryon_enabled",
-                    value: enabled ? "true" : "false",
-                    type: "single_line_text_field",
-                  }],
-                },
-              },
             }
-          ),
-        ])
-      )
+          `,
+          {
+            variables: {
+              input: {
+                id: p.id,
+                metafields: [{
+                  namespace: "tryfit",
+                  key: "tryon_enabled",
+                  value: enabled ? "true" : "false",
+                  type: "single_line_text_field",
+                }],
+              },
+            },
+          }
+        );
+        const bulkMetafieldData = await bulkMetafieldRes.json();
+        const bulkMetafieldErrors = bulkMetafieldData.data?.productUpdate?.userErrors ?? [];
+        if (bulkMetafieldErrors.length > 0) {
+          throw new Error(`Metafield update failed for ${p.numericId}: ${bulkMetafieldErrors[0].message}`);
+        }
+      })
     );
+
+    const failed = bulkResults.find(r => r.status === "rejected");
+    if (failed) {
+      return new Response(
+        JSON.stringify({ ok: false, error: failed.reason?.message || "Failed to sync collection products" }),
+        { status: 502, headers: { "Content-Type": "application/json" } }
+      );
+    }
 
     return { ok: true };
   }
@@ -486,7 +554,17 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
     fd.set("collection_products", collectionProductsPayload);
     fd.set("enabled", String(!collection.isTryonEnabled));
     fd.set("products_json", JSON.stringify(
-      collection.products.map(p => ({ id: p.id, numericId: p.numericId }))
+      collection.products.map(p => ({
+        id: p.id,
+        numericId: p.numericId,
+        title: p.title,
+        handle: p.handle,
+        vendor: p.vendor,
+        productType: p.productType,
+        featuredImage: p.featuredImage?.url ?? null,
+        price: p.price,
+        currency: p.currency,
+      }))
     ));
     submit(fd, { method: "post" });
   }
@@ -496,6 +574,13 @@ function CollectionRow({ collection, shop, submit, isSubmitting, navigate, openD
     fd.set("intent", "toggle_product");
     fd.set("shopify_product_id", product.numericId);
     fd.set("shopify_product_gid", product.id);
+    fd.set("title", product.title);
+    fd.set("handle", product.handle);
+    fd.set("vendor", product.vendor ?? "");
+    fd.set("product_type", product.productType ?? "");
+    fd.set("featured_image", product.featuredImage?.url ?? "");
+    fd.set("price", product.price ?? "");
+    fd.set("currency", product.currency ?? "");
     fd.set("collection_id", collection.numericId);
     fd.set("collection_title", collection.title);
     fd.set("collection_handle", collection.handle);
@@ -765,6 +850,11 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
     fd.set("shopify_product_gid", product.id);
     fd.set("title", product.title);
     fd.set("handle", product.handle);
+    fd.set("vendor", product.vendor ?? "");
+    fd.set("product_type", product.productType ?? "");
+    fd.set("featured_image", product.featuredImage?.url ?? "");
+    fd.set("price", product.price ?? "");
+    fd.set("currency", product.currency ?? "");
     fd.set("enabled", String(enabled));
     submit(fd, { method: "post" });
     setShowConfirm(false);
@@ -891,6 +981,7 @@ const ITEMS_PER_PAGE = 10;
 
 export default function Products() {
   const { collections, shop, stats } = useLoaderData();
+  const actionData = useActionData();
   const submit = useSubmit();
   const navigate = useNavigate();
   const navigation = useNavigation();
@@ -924,7 +1015,7 @@ export default function Products() {
   );
 
   return (
-    <Page fullWidth>
+    <Page fullWidth backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
       {/* Header */}
       <div className="vto-header" style={{ marginBottom: "24px" }}>
         <div>
@@ -932,6 +1023,14 @@ export default function Products() {
           <p className="vto-subtitle">Manage AI try-on availability across your live collections.</p>
         </div>
       </div>
+
+      {actionData && actionData.ok === false && actionData.error ? (
+        <div style={{ marginBottom: "16px" }}>
+          <Banner tone="critical" title="Could not update try-on status">
+            <p>{actionData.error}</p>
+          </Banner>
+        </div>
+      ) : null}
 
       {/* KPI Cards */}
       <div className="vto-grid-3col" style={{ marginBottom: "32px" }}>

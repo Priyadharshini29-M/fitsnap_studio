@@ -102,7 +102,7 @@ export async function loader({ request }) {
   const to = customTo || new Date().toISOString().split("T")[0];
   const from = customFrom || getFromDate(range);
 
-  const api = phpApiClient(apiKey, PHP_API_URL);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
   const [result, currencyRes, planRes] = await Promise.allSettled([
     api.getAnalytics({ from, to }),
     admin.graphql(CURRENCY_QUERY),
@@ -124,7 +124,7 @@ export async function loader({ request }) {
     to,
     shop:        session.shop,
     currencyCode,
-    currentPlan: planData?.plan ?? "free",
+    currentPlan: (planData?.plan === "basic" ? "free" : planData?.plan) ?? "free",
   };
 }
 
@@ -455,6 +455,28 @@ export default function Analytics() {
             marginBottom: "12px",
           }}
         >
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
+            <button
+              type="button"
+              onClick={() => navigate("/app")}
+              aria-label="Back to Dashboard"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "4px",
+                marginTop: "6px",
+                borderRadius: "6px",
+                color: "#111827",
+              }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
           <BlockStack gap="100">
             <h1
               style={{
@@ -476,6 +498,7 @@ export default function Analytics() {
               .
             </p>
           </BlockStack>
+          </div>
           <Button
             icon={CalendarIcon}
             onClick={() => setPopoverActive((v) => !v)}

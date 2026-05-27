@@ -45,7 +45,7 @@ const APP_ENABLED_QUERY = `#graphql
 export async function loader({ request }) {
   const { admin, session } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
-  const api = phpApiClient(apiKey, PHP_API_URL);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
   const [planRes, settingsRes, metaRes, shopRes, plansRes] =
     await Promise.allSettled([
@@ -97,7 +97,7 @@ export async function loader({ request }) {
 export async function action({ request }) {
   const { session, admin } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
-  const api = phpApiClient(apiKey, PHP_API_URL);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
   const body = await request.json();
   const res = await api.saveSettings(body);
 
@@ -452,7 +452,14 @@ export default function Index() {
         {/* Top Row: Video (70%) and Integration Progress (30%) */}
         <div className="vto-grid-70-30">
           {/* Video Tutorial Section */}
-          <div className="vto-video-container">
+          <a
+            href="https://youtu.be/fMRsrR3o4Zk"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="vto-video-container"
+            style={{ display: "block", textDecoration: "none" }}
+            aria-label="Watch tutorial video"
+          >
             <img
               src="/steps/videothumbnail.png"
               alt="Video Thumbnail"
@@ -475,7 +482,7 @@ export default function Index() {
                 </Text>
               </div>
             </div>
-          </div>
+          </a>
 
           {/* Integration Progress Card */}
           <div

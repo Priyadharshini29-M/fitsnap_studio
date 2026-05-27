@@ -48,6 +48,12 @@ export const action = async ({ request }) => {
   const phpBase   = (PHP_API_URL).replace(/\/$/, "");
   const phpSecret = PHP_API_SECRET;
 
+  // Guard: PHP backend not configured
+  if (!phpBase) {
+    console.error("[api.tryon] PHP_API_URL is not set");
+    return Response.json({ error: "Try-on service is not configured. Please contact support." }, { status: 503 });
+  }
+
   // ── Check plan limit (temporarily disabled) ──────────────────
   // const limitRes = await fetchPhp(phpBase, phpSecret, "GET", "/plan/limit", null, 10_000);
   // if (!limitRes.ok) {
@@ -89,40 +95,47 @@ export const action = async ({ request }) => {
   const tryOnRes = await fetchPhp(phpBase, phpSecret, "POST", "/tryon", tryOnPayload, 90_000);
 
   if (!tryOnRes.ok || !tryOnRes.data?.result_image) {
-    const errMsg = tryOnRes.timedOut
-      ? "Try-on timed out. Please try again."
-      : tryOnRes.error || "Try-on failed. Please try again.";
+    let errMsg;
+    if (tryOnRes.timedOut) {
+      errMsg = "This is taking longer than expected. Please try again.";
+    } else if (tryOnRes.error && tryOnRes.error.length < 300) {
+      // Surface the actual PHP error so the user/admin can act on it
+      errMsg = tryOnRes.error;
+    } else {
+      errMsg = "Try-on failed. Please try again.";
+    }
 
-    // Update session as failed
+    console.error("[api.tryon] try-on failed:", {
+      timedOut:   tryOnRes.timedOut,
+      error:      tryOnRes.error,
+      httpStatus: tryOnRes.httpStatus,
+      clothing_image: clothing_image?.substring(0, 80),
+    });
+
+    // Fire-and-forget — don't block the error response
     if (sessionId) {
-      await fetchPhp(phpBase, phpSecret, "POST", "/session/update", {
+      fetchPhp(phpBase, phpSecret, "POST", "/session/update", {
         session_id: sessionId,
         status: "failed",
         error_message: errMsg,
       }, 5_000).catch(() => {});
     }
 
-    console.error("[api.tryon] try-on failed:", {
-      timedOut: tryOnRes.timedOut,
-      error: tryOnRes.error,
-      httpStatus: tryOnRes.httpStatus,
-    });
-
-    const status = tryOnRes.timedOut ? 504 : 500;
+    const status = tryOnRes.timedOut ? 504 : (tryOnRes.httpStatus || 500);
     return Response.json({ error: errMsg, session_id: sessionId }, { status });
   }
 
   const resultImage = tryOnRes.data.result_image;
   const resultSeed  = tryOnRes.data.seed;
 
-  // Update session as completed
+  // Fire-and-forget — don't block the result response
   if (sessionId) {
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
       .toISOString()
       .replace("T", " ")
       .slice(0, 19);
 
-    await fetchPhp(phpBase, phpSecret, "POST", "/session/update", {
+    fetchPhp(phpBase, phpSecret, "POST", "/session/update", {
       session_id: sessionId,
       status: "completed",
       result_image_url: resultImage,

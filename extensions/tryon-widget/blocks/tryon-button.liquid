@@ -1,6 +1,48 @@
 {%- assign app_enabled = shop.metafields.fitfyce.app_enabled | default: 'true' -%}
 {%- assign tryon_enabled = product.metafields.tryfit.tryon_enabled | default: 'false' -%}
 {%- assign variant_mappings_json = product.metafields.tryfit.variant_mappings | default: '{}' -%}
+
+{%- comment -%}
+  Embed root: always rendered regardless of per-product enable state.
+  Tells the JS singleton what page context it is in so _applySettings
+  can run the live enabled-product check (beats CDN-cached metafield HTML)
+  and _injectCollectionIcons knows it is on a collection page.
+{%- endcomment -%}
+{%- if template.name == 'collection' -%}
+  {%- assign collection_tryon = collection.metafields.tryfit.tryon_enabled | default: 'false' -%}
+  <div
+    id="tryfit-embed-root"
+    data-page-type="collection"
+    data-collection-tryon="{{ collection_tryon }}"
+    data-proxy-url="https://{{ shop.permanent_domain }}/apps/tryfit"
+    data-shop="{{ shop.permanent_domain }}"
+    data-widget-id="fitfyce-{{ block.id }}"
+    style="display:none;"
+    aria-hidden="true"
+  ></div>
+{%- else -%}
+  <div
+    id="tryfit-embed-root"
+    data-page-type="product"
+    data-product-tryon="{{ tryon_enabled }}"
+    data-product-id="{{ product.id }}"
+    data-product-handle="{{ product.handle }}"
+    data-product-title="{{ product.title | escape }}"
+    data-proxy-url="https://{{ shop.permanent_domain }}/apps/tryfit"
+    data-shop="{{ shop.permanent_domain }}"
+    data-variants="{{ product.variants | json | escape }}"
+    data-options="{{ product.options | json | escape }}"
+    data-clothing-images="{{ variant_mappings_json }}"
+    data-product-images='{{ product.images | json | escape }}'
+    data-selected-variant-id="{{ product.selected_or_first_available_variant.id }}"
+    data-featured-image="{{ product.featured_image | image_url: width: 1024 }}"
+    data-currency="{{ shop.currency }}"
+    data-widget-id="fitfyce-{{ block.id }}"
+    style="display:none;"
+    aria-hidden="true"
+  ></div>
+{%- endif -%}
+
 {%- if app_enabled == 'true' and tryon_enabled == 'true' -%}
 
   <div id="tryfit-btn-wrap" class="tryfit-btn-container tryfit-app-block" data-widget-id="fitfyce-{{ block.id }}">
@@ -9,10 +51,14 @@
       id="tryfit-open-btn"
       class="tryfit-open-btn"
       data-product-id="{{ product.id }}"
+      data-product-handle="{{ product.handle }}"
+      data-storefront-url="{{ product.url }}"
       data-product-title="{{ product.title | escape }}"
       data-variants="{{ product.variants | json | escape }}"
       data-options="{{ product.options | json | escape }}"
       data-clothing-images="{{ variant_mappings_json }}"
+      data-product-images='{{ product.images | json | escape }}'
+      data-selected-variant-id="{{ product.selected_or_first_available_variant.id }}"
       data-featured-image="{{ product.featured_image | image_url: width: 1024 }}"
       data-proxy-url="https://{{ shop.permanent_domain }}/apps/tryfit"
       data-shop="{{ shop.permanent_domain }}"
