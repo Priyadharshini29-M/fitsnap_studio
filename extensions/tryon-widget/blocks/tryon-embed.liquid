@@ -8,7 +8,7 @@
 {%- assign app_enabled = shop.metafields.fitfyce.app_enabled | default: 'true' -%}
 {%- if app_enabled == 'true' -%}
   <div id="tryfit-embed-root"
-    data-proxy-url="{{ shop.secure_url }}/apps/tryfit"
+    data-proxy-url="https://{{ shop.permanent_domain }}/apps/tryfit"
     data-shop="{{ shop.permanent_domain }}"
     data-currency="{{ shop.currency }}"
     data-widget-id="fitfyce-{{ shop.permanent_domain | replace: '.', '-' }}"
@@ -28,7 +28,7 @@
     data-selected-variant-id="{{ product.selected_or_first_available_variant.id }}"
     {%- elsif request.page_type == 'collection' -%}
     data-page-type="collection"
-    data-collection-tryon="{{ collection.metafields.tryfit.tryon_enabled }}"
+    data-collection-tryon="{{ collection.metafields.tryfit.tryon_enabled | default: 'true' }}"
     {%- else -%}
     data-page-type="other"
     {%- endif -%}
