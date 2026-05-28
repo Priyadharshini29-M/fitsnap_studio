@@ -365,7 +365,7 @@ const CustomToggle = ({ checked, onChange, disabled }) => (
       width: "44px",
       height: "24px",
       borderRadius: "12px",
-      background: checked ? "var(--vto-primary)" : "#E2E8zF0",
+      background: checked ? "var(--vto-primary)" : "#E2E8F0",
       position: "relative",
       cursor: disabled ? "not-allowed" : "pointer",
       transition: "background 0.3s ease",
