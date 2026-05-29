@@ -2315,22 +2315,32 @@
       });
     },
 
-    // Convert uploaded file to JPEG at original dimensions (no downscaling).
-    // JPEG conversion is still needed so the server receives a consistent format.
+    // Convert uploaded file to JPEG, capped at MAX_AVATAR_SIDE px on the longest
+    // side.  Limiting here keeps the base64 POST body well under server and
+    // Shopify-proxy request-size limits while still giving the AI model enough
+    // detail (Fashn.ai recommends ≥ 768 px; 1280 px is excellent quality).
     toJpegBlob: function (file) {
+      var MAX_AVATAR_SIDE = 1280;
       return new Promise(function (resolve) {
         var img = new Image();
         var url = URL.createObjectURL(file);
         img.onload = function () {
           URL.revokeObjectURL(url);
+          var w = img.naturalWidth;
+          var h = img.naturalHeight;
+          if (w > MAX_AVATAR_SIDE || h > MAX_AVATAR_SIDE) {
+            var ratio = Math.min(MAX_AVATAR_SIDE / w, MAX_AVATAR_SIDE / h);
+            w = Math.round(w * ratio);
+            h = Math.round(h * ratio);
+          }
           var canvas = document.createElement("canvas");
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
-          canvas.getContext("2d").drawImage(img, 0, 0);
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
           canvas.toBlob(
             function (blob) { resolve(blob || file); },
             "image/jpeg",
-            0.92,
+            0.88,
           );
         };
         img.onerror = function () {

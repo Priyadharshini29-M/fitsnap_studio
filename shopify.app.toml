@@ -2,7 +2,7 @@
 
 client_id = "876421af61b2135a56534b6b182909bd"
 name = "FitSnap"
-application_url = "https://unrivaled-unheated-unstable.ngrok-free.dev"
+application_url = "https://thefitsnap.fly.dev"
 embedded = true
 
 [build]
@@ -23,9 +23,9 @@ uri    = "/api/webhook"
 # These use a dedicated section — NOT [[webhooks.subscriptions]].
 # URLs must be absolute. Update the domain when you set your production URL.
 [webhooks.privacy_compliance]
-customer_data_request_url = "https://unrivaled-unheated-unstable.ngrok-free.dev/api/webhook"
-customer_deletion_url     = "https://unrivaled-unheated-unstable.ngrok-free.dev/api/webhook"
-shop_deletion_url         = "https://unrivaled-unheated-unstable.ngrok-free.dev/api/webhook"
+customer_data_request_url = "https://thefitsnap.fly.dev/api/webhook"
+customer_deletion_url     = "https://thefitsnap.fly.dev/api/webhook"
+shop_deletion_url         = "https://thefitsnap.fly.dev/api/webhook"
 
 [access_scopes]
 # read_orders is required by Shopify CLI for the orders/paid webhook subscription.
@@ -33,7 +33,7 @@ shop_deletion_url         = "https://unrivaled-unheated-unstable.ngrok-free.dev/
 scopes = "read_products,write_products,read_orders"
 
 [auth]
-redirect_urls = [ "https://unrivaled-unheated-unstable.ngrok-free.dev/api/auth" ]
+redirect_urls = [ "https://thefitsnap.fly.dev/api/auth" ]
 [app_proxy]
 url = "https://tryonapp.digifyce.com"
 prefix = "apps"

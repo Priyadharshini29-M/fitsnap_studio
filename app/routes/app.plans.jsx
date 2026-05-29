@@ -4,7 +4,7 @@ import { Page } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import phpApiClient from "../lib/php-api.server";
 import { ensureMerchant } from "../lib/merchant.server";
-import { PHP_API_URL, SHOPIFY_APP_URL, NODE_ENV } from "../lib/env.server";
+import { PHP_API_URL, NODE_ENV } from "../lib/env.server";
 
 // ─── Billing ─────────────────────────────────────────────────────────────────
 
@@ -39,23 +39,29 @@ export async function loader({ request }) {
     const isActive   = activeSubs.some(
       (s) => s.name === PLAN_KEY_MAP[pendingPlan] && s.status === "ACTIVE"
     );
-    if (isActive) await api.updatePlan(pendingPlan);
-    throw redirect("/app/plans");
+    if (isActive) {
+      await api.updatePlan(pendingPlan);
+      throw redirect("/app/plans");
+    }
+    // Charge was declined — redirect back with a flag so the UI can inform the merchant
+    throw redirect("/app/plans?billing_declined=1");
   }
 
   const planRes = await api.checkPlanLimit();
   const planData = planRes.ok ? planRes.data : null;
 
   const rawPlan = planData?.plan ?? "free";
+  const billingDeclined = url.searchParams.get("billing_declined") === "1";
   return {
-    currentPlan: rawPlan === "basic" ? "free" : rawPlan,
-    usedTryons:  planData?.used  ?? 0,
-    limitTryons: planData?.limit ?? 10,
+    currentPlan:    rawPlan === "basic" ? "free" : rawPlan,
+    usedTryons:     planData?.used  ?? 0,
+    limitTryons:    planData?.limit ?? 10,
+    billingDeclined,
   };
 }
 
 export async function action({ request }) {
-  const { admin, billing } = await authenticate.admin(request);
+  const { admin, billing, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const planName = formData.get("plan");
 
@@ -90,9 +96,8 @@ export async function action({ request }) {
 
     // Sync plan change to PHP backend
     try {
-      const { session: freeSession } = await authenticate.admin(request);
-      const freeApiKey = await ensureMerchant(freeSession);
-      await phpApiClient(freeApiKey, PHP_API_URL).updatePlan("free");
+      const freeApiKey = await ensureMerchant(session);
+      await phpApiClient(freeApiKey, PHP_API_URL, session.shop).updatePlan("free");
     } catch {
       // Non-blocking — plan will reconcile on next load
     }
@@ -104,11 +109,13 @@ export async function action({ request }) {
   const planKey = PLAN_KEY_MAP[planName];
   if (!planKey) return { error: "Invalid plan selected" };
 
-  const appUrl = SHOPIFY_APP_URL.replace(/\/$/, "");
+  // Derive returnUrl from the current request so it always points to the live
+  // production host, regardless of what SHOPIFY_APP_URL is set to.
+  const { origin } = new URL(request.url);
   await billing.request({
     plan:      planKey,
     isTest:    NODE_ENV !== "production",
-    returnUrl: `${appUrl}/app/plans?plan=${planName}`,
+    returnUrl: `${origin}/app/plans?plan=${planName}`,
   });
 
   return null;
@@ -447,7 +454,7 @@ function FaqAccordion() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Plans() {
-  const { currentPlan, usedTryons, limitTryons } = useLoaderData();
+  const { currentPlan, usedTryons, limitTryons, billingDeclined } = useLoaderData();
   const navigation   = useNavigation();
   const navigate     = useNavigate();
   const isSubmitting = navigation.state === "submitting";
@@ -455,6 +462,21 @@ export default function Plans() {
   return (
     <Page backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
       <div className="vto-plan-page">
+        {/* Billing declined notice */}
+        {billingDeclined && (
+          <div style={{
+            background: "#FFF3CD",
+            border: "1px solid #F59E0B",
+            borderRadius: "8px",
+            padding: "12px 16px",
+            marginBottom: "24px",
+            fontSize: "14px",
+            color: "#92400E",
+          }}>
+            The subscription request was declined. You can upgrade again whenever you&apos;re ready.
+          </div>
+        )}
+
         {/* Header */}
         <div className="vto-plan-page-header">
           <span className="vto-pricing-pill">PRICING</span>

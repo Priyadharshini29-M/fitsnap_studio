@@ -22,11 +22,13 @@ const shopify = shopifyApp({
       amount: 19,
       currencyCode: "USD",
       interval: BillingInterval.Every30Days,
+      trialDays: 3,
     },
     "FitSnap Pro": {
       amount: 49,
       currencyCode: "USD",
       interval: BillingInterval.Every30Days,
+      trialDays: 3,
     },
   },
   future: {
