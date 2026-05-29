@@ -1,5 +1,9 @@
 FROM node:20-alpine
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl curl
+
+# Install litestream binary
+RUN curl -fsSL https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream-v0.3.13-linux-amd64.tar.gz \
+    | tar -xz -C /usr/local/bin litestream
 
 EXPOSE 3000
 
