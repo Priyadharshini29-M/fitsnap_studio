@@ -109,14 +109,12 @@ export async function action({ request }) {
   const planKey = PLAN_KEY_MAP[planName];
   if (!planKey) return { error: "Invalid plan selected" };
 
-  // Derive returnUrl from the current request so it always points to the live
-  // production host, regardless of what SHOPIFY_APP_URL is set to.
-  const { origin } = new URL(request.url);
-  await billing.request({
-    plan:      planKey,
-    isTest:    NODE_ENV !== "production",
-    returnUrl: `${origin}/app/plans?plan=${planName}`,
-  });
+  // Redirect to Shopify's native pricing plans page
+  const shopDomain = session.shop.replace('.myshopify.com', '');
+  const appHandle = 'fitsnap'; // Replace with your actual app handle if different
+  const shopifyPricingUrl = `https://admin.shopify.com/store/${shopDomain}/charges/${appHandle}/pricing_plans`;
+  
+  throw redirect(shopifyPricingUrl);
 
   return null;
 }
