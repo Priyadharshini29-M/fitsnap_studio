@@ -19,21 +19,27 @@ const shopify = shopifyApp({
   distribution: AppDistribution.AppStore,
   billing: {
     "FitSnap Growth": {
-      amount: 19,
-      currencyCode: "USD",
-      interval: BillingInterval.Every30Days,
+      lineItems: [
+        {
+          amount: 19,
+          currencyCode: "USD",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
       trialDays: 3,
     },
     "FitSnap Pro": {
-      amount: 49,
-      currencyCode: "USD",
-      interval: BillingInterval.Every30Days,
+      lineItems: [
+        {
+          amount: 49,
+          currencyCode: "USD",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
       trialDays: 3,
     },
   },
-  future: {
-    expiringOfflineAccessTokens: true,
-  },
+  future: {},
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),

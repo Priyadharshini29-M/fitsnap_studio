@@ -1,124 +1,262 @@
-import { Form, redirect, useLoaderData, useNavigation, useNavigate } from "react-router";
-import { useState } from "react";
+// Server-side: redirect lives in react-router (React Router v7 equivalent of @remix-run/node)
+import { redirect } from "react-router";
+
+// Client-side hooks and components (React Router v7 equivalent of @remix-run/react)
+import {
+  Form,
+  useLoaderData,
+  useNavigation,
+  useNavigate,
+  useActionData,
+  useRouteError,
+} from "react-router";
+
+import { useState, useEffect } from "react";
 import { Page } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import phpApiClient from "../lib/php-api.server";
 import { ensureMerchant } from "../lib/merchant.server";
 import { PHP_API_URL, NODE_ENV } from "../lib/env.server";
 
-// ─── Billing ─────────────────────────────────────────────────────────────────
+// ─── Billing constants ────────────────────────────────────────────────────────
 
 const PLAN_KEY_MAP = {
   growth: "FitSnap Growth",
   pro:    "FitSnap Pro",
 };
 
+const PLAN_PRICES = { growth: 19, pro: 49 };
+
 // Numeric rank for upgrade vs downgrade label
 const PLAN_RANK = { free: 0, growth: 1, pro: 2 };
 
-export async function loader({ request }) {
-  const { session, admin } = await authenticate.admin(request);
-  const apiKey = await ensureMerchant(session);
-  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
+// ─── Loader ───────────────────────────────────────────────────────────────────
 
-  const url = new URL(request.url);
+export async function loader({ request }) {
+  console.log("[loader] plans page start");
+
+  let session, admin;
+  try {
+    ({ session, admin } = await authenticate.admin(request));
+    console.log("[loader] authenticated shop:", session?.shop);
+  } catch (authErr) {
+    // Re-throw Shopify auth Responses (redirects, 401s) — do NOT swallow them
+    if (authErr instanceof Response) throw authErr;
+    console.error("[loader] authentication error:", authErr?.message ?? authErr);
+    // Re-throw so the ErrorBoundary can display the message
+    throw new Error(`Authentication failed: ${authErr?.message ?? "Unknown error"}`);
+  }
+
+  const apiKey = await ensureMerchant(session);
+  const api    = phpApiClient(apiKey, PHP_API_URL, session.shop);
+
+  const url         = new URL(request.url);
   const chargeId    = url.searchParams.get("charge_id");
   const pendingPlan = url.searchParams.get("plan");
 
+  // ── Post-billing callback: verify subscription ────────────────────────────
   if (chargeId && pendingPlan && PLAN_KEY_MAP[pendingPlan]) {
-    const gqlRes = await admin.graphql(`
-      #graphql
-      query {
-        currentAppInstallation {
-          activeSubscriptions { name status }
+    console.log("[loader] verifying charge_id for plan:", pendingPlan);
+    try {
+      const gqlRes = await admin.graphql(`
+        #graphql
+        query {
+          currentAppInstallation {
+            activeSubscriptions { name status }
+          }
         }
+      `);
+      const gqlData    = await gqlRes.json();
+      const activeSubs = gqlData?.data?.currentAppInstallation?.activeSubscriptions ?? [];
+      const isActive   = activeSubs.some(
+        (s) => s.name === PLAN_KEY_MAP[pendingPlan] && s.status === "ACTIVE"
+      );
+
+      if (isActive) {
+        console.log("[loader] subscription active, updating plan:", pendingPlan);
+        await api.updatePlan(pendingPlan);
+        return redirect("/app/plans");
       }
-    `);
-    const gqlData    = await gqlRes.json();
-    const activeSubs = gqlData.data?.currentAppInstallation?.activeSubscriptions ?? [];
-    const isActive   = activeSubs.some(
-      (s) => s.name === PLAN_KEY_MAP[pendingPlan] && s.status === "ACTIVE"
-    );
-    if (isActive) {
-      await api.updatePlan(pendingPlan);
-      throw redirect("/app/plans");
+      console.log("[loader] subscription not active, billing declined");
+    } catch (verifyErr) {
+      console.error("[loader] charge verification error:", verifyErr?.message ?? verifyErr);
     }
-    // Charge was declined — redirect back with a flag so the UI can inform the merchant
-    throw redirect("/app/plans?billing_declined=1");
+    return redirect("/app/plans?billing_declined=1");
   }
 
-  const planRes = await api.checkPlanLimit();
-  const planData = planRes.ok ? planRes.data : null;
+  // ── Normal load ───────────────────────────────────────────────────────────
+  let planRes;
+  try {
+    planRes = await api.checkPlanLimit();
+  } catch (planErr) {
+    console.error("[loader] checkPlanLimit error:", planErr?.message ?? planErr);
+    planRes = { ok: false };
+  }
 
-  const rawPlan = planData?.plan ?? "free";
+  const planData        = planRes.ok ? planRes.data : null;
+  const rawPlan        = planData?.plan ?? "free";
   const billingDeclined = url.searchParams.get("billing_declined") === "1";
+  const planUpgraded    = url.searchParams.get("plan_upgraded")    === "1";
+
+  console.log("[loader] current plan:", rawPlan, "upgraded:", planUpgraded);
+
   return {
     currentPlan:    rawPlan === "basic" ? "free" : rawPlan,
     usedTryons:     planData?.used  ?? 0,
     limitTryons:    planData?.limit ?? 10,
     billingDeclined,
+    planUpgraded,
   };
 }
 
-export async function action({ request }) {
-  const { admin, billing, session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const planName = formData.get("plan");
+// ─── Action ───────────────────────────────────────────────────────────────────
 
-  // ── Downgrade to free: cancel the active Shopify subscription ────────────
+export async function action({ request }) {
+  console.log("[action] plans action start");
+
+  // ── Authenticate ──────────────────────────────────────────────────────────
+  let admin, session;
+  try {
+    ({ admin, session } = await authenticate.admin(request));
+    console.log("[action] authenticated shop:", session?.shop);
+  } catch (authErr) {
+    // Re-throw Shopify auth Responses (redirects, 401s) — do NOT swallow them
+    if (authErr instanceof Response) throw authErr;
+    console.error("[action] authentication error:", authErr?.message ?? authErr);
+    return { error: `Authentication error: ${authErr?.message ?? "Unknown"}` };
+  }
+
+  // ── Read form data ────────────────────────────────────────────────────────
+  let planName;
+  try {
+    const formData = await request.formData();
+    planName       = formData.get("plan");
+    console.log("[action] selected plan:", planName);
+  } catch (bodyErr) {
+    console.error("[action] formData error:", bodyErr?.message ?? bodyErr);
+    return { error: `Could not read form: ${bodyErr?.message ?? "Unknown"}` };
+  }
+
+  // ── Downgrade to free ─────────────────────────────────────────────────────
   if (planName === "free") {
-    const gqlRes = await admin.graphql(`
-      #graphql
-      query GetActiveSubscriptions {
-        currentAppInstallation {
-          activeSubscriptions { id name status }
+    console.log("[action] downgrading to free plan");
+    try {
+      const gqlRes = await admin.graphql(`
+        #graphql
+        query GetActiveSubscriptions {
+          currentAppInstallation {
+            activeSubscriptions { id name status }
+          }
+        }
+      `);
+      const gqlData    = await gqlRes.json();
+      const activeSubs = gqlData?.data?.currentAppInstallation?.activeSubscriptions ?? [];
+
+      for (const sub of activeSubs) {
+        if (sub.status === "ACTIVE") {
+          console.log("[action] cancelling subscription:", sub.id);
+          await admin.graphql(
+            `#graphql
+            mutation CancelSubscription($id: ID!) {
+              appSubscriptionCancel(id: $id) {
+                appSubscription { id status }
+                userErrors { field message }
+              }
+            }`,
+            { variables: { id: sub.id } }
+          );
         }
       }
-    `);
-    const gqlData = await gqlRes.json();
-    const activeSubs =
-      gqlData.data?.currentAppInstallation?.activeSubscriptions ?? [];
-
-    for (const sub of activeSubs) {
-      if (sub.status === "ACTIVE") {
-        await admin.graphql(
-          `#graphql
-          mutation CancelSubscription($id: ID!) {
-            appSubscriptionCancel(id: $id) {
-              appSubscription { id status }
-              userErrors { field message }
-            }
-          }`,
-          { variables: { id: sub.id } }
-        );
-      }
+    } catch (cancelErr) {
+      console.error("[action] subscription cancel error:", cancelErr?.message ?? cancelErr);
+      // Non-fatal — continue to update PHP backend
     }
 
-    // Sync plan change to PHP backend
     try {
       const freeApiKey = await ensureMerchant(session);
       await phpApiClient(freeApiKey, PHP_API_URL, session.shop).updatePlan("free");
-    } catch {
+      console.log("[action] PHP plan updated to free");
+    } catch (phpErr) {
+      console.error("[action] PHP update error:", phpErr?.message ?? phpErr);
       // Non-blocking — plan will reconcile on next load
     }
 
-    throw redirect("/app/plans");
+    return redirect("/app/plans");
   }
 
-  // ── Upgrade or switch between paid plans ─────────────────────────────────
+  // ── Upgrade / switch paid plan ────────────────────────────────────────────
   const planKey = PLAN_KEY_MAP[planName];
-  if (!planKey) return { error: "Invalid plan selected" };
+  const amount  = PLAN_PRICES[planName];
 
-  // Derive returnUrl from the current request so it always points to the live
-  // production host, regardless of what SHOPIFY_APP_URL is set to.
+  if (!planKey || !amount) {
+    console.error("[action] invalid plan selected:", planName);
+    return { error: "Invalid plan selected. Please try again." };
+  }
+
   const { origin } = new URL(request.url);
-  await billing.request({
-    plan:      planKey,
-    isTest:    NODE_ENV !== "production",
-    returnUrl: `${origin}/app/plans?plan=${planName}`,
-  });
+  const returnUrl  = `${origin}/billing/callback?plan=${planName}&shop=${session.shop}`;
+  console.log("[action] creating subscription for plan:", planKey, "returnUrl:", returnUrl);
 
-  return null;
+  try {
+    const gqlRes = await admin.graphql(
+      `#graphql
+      mutation AppSubscriptionCreate(
+        $name: String!
+        $returnUrl: URL!
+        $test: Boolean
+        $trialDays: Int
+        $lineItems: [AppSubscriptionLineItemInput!]!
+      ) {
+        appSubscriptionCreate(
+          name: $name
+          returnUrl: $returnUrl
+          test: $test
+          trialDays: $trialDays
+          lineItems: $lineItems
+        ) {
+          appSubscription { id }
+          confirmationUrl
+          userErrors { field message }
+        }
+      }`,
+      {
+        variables: {
+          name:      planKey,
+          returnUrl,
+          test:      NODE_ENV !== "production",
+          trialDays: 3,
+          lineItems: [{
+            plan: {
+              appRecurringPricingDetails: {
+                price: { amount: String(amount), currencyCode: "USD" },
+                interval: "EVERY_30_DAYS",
+              },
+            },
+          }],
+        },
+      }
+    );
+
+    const gqlData        = await gqlRes.json();
+    const confirmationUrl = gqlData?.data?.appSubscriptionCreate?.confirmationUrl;
+    const userErrors      = gqlData?.data?.appSubscriptionCreate?.userErrors ?? [];
+
+    if (userErrors.length > 0) {
+      console.error("[action] GraphQL userErrors:", JSON.stringify(userErrors));
+    }
+
+    if (!confirmationUrl) {
+      const msg = userErrors[0]?.message ?? "Could not create subscription. Please try again.";
+      console.error("[action] no confirmationUrl returned:", msg);
+      return { error: msg };
+    }
+
+    console.log("[action] subscription created, confirmationUrl received");
+    return { billingUrl: confirmationUrl };
+  } catch (billingErr) {
+    console.error("[action] billing GraphQL error:", billingErr?.message ?? billingErr);
+    return { error: "Billing service error. Please try again or contact support." };
+  }
 }
 
 // ─── Static plan config ───────────────────────────────────────────────────────
@@ -269,12 +407,12 @@ function Chevron({ open }) {
   );
 }
 
-// ─── Usage meter ─────────────────────────────────────────────────────────────
+// ─── Usage meter ──────────────────────────────────────────────────────────────
 
 function UsageMeter({ used, limit, plan }) {
-  const pct    = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-  const danger = pct >= 90;
-  const warn   = pct >= 70;
+  const pct      = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const danger   = pct >= 90;
+  const warn     = pct >= 70;
   const barColor = danger ? "#EF4444" : warn ? "#F59E0B" : "#1D9E75";
 
   return (
@@ -348,8 +486,8 @@ function PlanCard({ config, isCurrent, currentPlanKey, isSubmitting }) {
 
   let ctaLabel = config.buttonLabel;
   if (!isCurrent) {
-    if (isDowngrade) ctaLabel = `Downgrade to ${config.name}`;
-    else if (isUpgrade) ctaLabel = `Upgrade to ${config.name}`;
+    if (isDowngrade)      ctaLabel = `Downgrade to ${config.name}`;
+    else if (isUpgrade)   ctaLabel = `Upgrade to ${config.name}`;
   }
 
   return (
@@ -454,14 +592,95 @@ function FaqAccordion() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Plans() {
-  const { currentPlan, usedTryons, limitTryons, billingDeclined } = useLoaderData();
+  const { currentPlan, usedTryons, limitTryons, billingDeclined, planUpgraded } = useLoaderData();
+  const actionData   = useActionData();
   const navigation   = useNavigation();
   const navigate     = useNavigate();
   const isSubmitting = navigation.state === "submitting";
 
+  // Auto-redirect to Shopify billing page as soon as we have the URL.
+  // window.top.location.href works in Shopify's embedded iframe (allow-top-navigation).
+  // The button below is the fallback if the browser blocks the automatic redirect.
+  useEffect(() => {
+    if (!actionData?.billingUrl) return;
+    try {
+      window.top.location.href = actionData.billingUrl;
+    } catch {
+      // Cross-origin blocked — user will click the button below
+    }
+  }, [actionData?.billingUrl]);
+
+  if (actionData?.billingUrl) {
+    return (
+      <Page backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
+        <div style={{ textAlign: "center", padding: "80px 20px" }}>
+          <p style={{ fontSize: "15px", color: "#6B7280", marginBottom: "20px" }}>
+            Redirecting to Shopify billing…
+          </p>
+          <a
+            href={actionData.billingUrl}
+            target="_top"
+            rel="noreferrer"
+            style={{
+              display: "inline-block",
+              background: "#1D9E75",
+              color: "#fff",
+              padding: "14px 32px",
+              borderRadius: "8px",
+              textDecoration: "none",
+              fontWeight: 600,
+              fontSize: "15px",
+            }}
+          >
+            Click here if not redirected automatically →
+          </a>
+        </div>
+      </Page>
+    );
+  }
+
   return (
     <Page backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
       <div className="vto-plan-page">
+
+        {/* Plan upgrade success banner */}
+        {planUpgraded && (
+          <div style={{
+            background: "#D1FAE5",
+            border: "1px solid #6EE7B7",
+            borderRadius: "8px",
+            padding: "14px 18px",
+            marginBottom: "24px",
+            fontSize: "14px",
+            color: "#065F46",
+            fontWeight: 500,
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+          }}>
+            <span style={{ fontSize: "20px" }}>✅</span>
+            <span>
+              Your plan has been upgraded to <strong>{currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)}</strong> successfully!
+              Your new features are active now.
+            </span>
+          </div>
+        )}
+
+        {/* Action error banner */}
+        {actionData?.error && (
+          <div style={{
+            background: "#FEE2E2",
+            border: "1px solid #EF4444",
+            borderRadius: "8px",
+            padding: "12px 16px",
+            marginBottom: "24px",
+            fontSize: "14px",
+            color: "#991B1B",
+          }}>
+            ⚠ {actionData.error}
+          </div>
+        )}
+
         {/* Billing declined notice */}
         {billingDeclined && (
           <div style={{
@@ -506,5 +725,61 @@ export default function Plans() {
         <FaqAccordion />
       </div>
     </Page>
+  );
+}
+
+// ─── Error boundary ───────────────────────────────────────────────────────────
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+
+  const message =
+    error?.message ??
+    error?.data ??
+    (typeof error === "string" ? error : null) ??
+    "An unexpected error occurred.";
+
+  const stack =
+    typeof error?.stack === "string" ? error.stack : null;
+
+  return (
+    <div style={{ padding: "40px 24px", fontFamily: "system-ui, sans-serif" }}>
+      <h2 style={{ color: "#dc2626", marginBottom: "16px" }}>Plans Page Error</h2>
+      <pre
+        style={{
+          background: "#fee2e2",
+          border: "1px solid #fca5a5",
+          padding: "16px",
+          borderRadius: "8px",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-all",
+          fontSize: "13px",
+          color: "#7f1d1d",
+          marginBottom: "12px",
+        }}
+      >
+        {message}
+      </pre>
+      {stack && (
+        <details>
+          <summary style={{ cursor: "pointer", fontSize: "13px", color: "#6b7280" }}>
+            Stack trace
+          </summary>
+          <pre
+            style={{
+              background: "#f9fafb",
+              padding: "12px",
+              borderRadius: "6px",
+              fontSize: "12px",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+              marginTop: "8px",
+            }}
+          >
+            {stack}
+          </pre>
+        </details>
+      )}
+    </div>
   );
 }

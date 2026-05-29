@@ -1,4 +1,4 @@
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { Outlet, useLoaderData, useRouteError, redirect } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -7,8 +7,17 @@ import { authenticate } from "../shopify.server";
 import { SHOPIFY_API_KEY } from "../lib/env.server";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
-
+  try {
+    await authenticate.admin(request);
+  } catch (err) {
+    // Let Shopify auth Responses (redirects/401s) pass through normally
+    if (err instanceof Response) throw err;
+    // Network/token-exchange error — redirect to login so merchant can re-auth
+    console.error("[app.jsx loader] auth error:", err?.message ?? err);
+    const url = new URL(request.url);
+    const shop = url.searchParams.get("shop") ?? "";
+    throw redirect(`/auth/login${shop ? `?shop=${shop}` : ""}`);
+  }
   return { apiKey: SHOPIFY_API_KEY };
 };
 
