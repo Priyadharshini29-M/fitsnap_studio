@@ -1,3 +1,13 @@
+FROM node:20-alpine AS build
+RUN apk add --no-cache openssl
+
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# ── Runtime stage ──────────────────────────────────────────────────────────────
 FROM node:20-alpine
 RUN apk add --no-cache openssl curl
 
@@ -6,17 +16,15 @@ RUN curl -fsSL https://github.com/benbjohnson/litestream/releases/download/v0.3.
     | tar -xz -C /usr/local/bin litestream
 
 EXPOSE 3000
-
 WORKDIR /app
-
 ENV NODE_ENV=production
 
 COPY package.json package-lock.json* ./
-
 RUN npm ci --omit=dev && npm cache clean --force
 
-COPY . .
+COPY --from=build /app/build ./build
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/public ./public
+COPY dbsetup.js litestream.yml ./
 
-RUN npm run build
-
-CMD ["npm", "run", "docker-start"]
+CMD ["node", "./dbsetup.js", "npm", "run", "start"]
