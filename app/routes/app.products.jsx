@@ -43,6 +43,7 @@ const COLLECTIONS_QUERY = `#graphql
                   minVariantPrice { amount currencyCode }
                   maxVariantPrice { amount currencyCode }
                 }
+                metafield(namespace: "tryfit", key: "tryon_enabled") { value }
               }
             }
           }
@@ -111,6 +112,11 @@ export async function loader({ request }) {
               : minAmt === maxAmt || maxAmt === null
                 ? minAmt
                 : `${minAmt} – ${maxAmt}`;
+          // Shopify metafield is the authoritative source — it's updated in the
+          // same action mutation so it's always consistent on loader revalidation.
+          // PHP is used as fallback only if the metafield hasn't been set yet.
+          const shopifyEnabled = p.metafield?.value === "true";
+          const phpEnabled = phpRow ? phpRow.is_tryon_enabled == 1 : false;
           return {
             id: p.id,
             title: p.title,
@@ -120,7 +126,7 @@ export async function loader({ request }) {
             tags: p.tags ?? [],
             featuredImage: p.featuredImage,
             numericId,
-            isTryonEnabled: phpRow ? phpRow.is_tryon_enabled == 1 : false,
+            isTryonEnabled: p.metafield !== null ? shopifyEnabled : phpEnabled,
             price: priceDisplay,
             currency,
           };
