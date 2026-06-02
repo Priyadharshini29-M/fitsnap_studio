@@ -28,6 +28,6 @@ redirect_urls = [
 ]
 
 [app_proxy]
-url = "https://tryonapp.digifyce.com"
+url = "https://thefitsnap.fly.dev"
 prefix = "apps"
 subpath = "tryfit"

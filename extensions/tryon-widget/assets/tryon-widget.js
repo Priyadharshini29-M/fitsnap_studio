@@ -2254,7 +2254,7 @@
 
       return fetch(
         this.config.proxyUrl +
-          "/session/create?shop=" +
+          "/api/session/create?shop=" +
           encodeURIComponent(shop),
         {
           method: "POST",
@@ -2417,7 +2417,7 @@
         if (controller) opts.signal = controller.signal;
 
         return fetch(
-          self.config.proxyUrl + "/tryon?shop=" + encodeURIComponent(shop),
+          self.config.proxyUrl + "/api/tryon?shop=" + encodeURIComponent(shop),
           opts,
         )
           .then(function (r) {
@@ -3123,7 +3123,7 @@
       };
       if (controller) opts.signal = controller.signal;
 
-      fetch(self.config.proxyUrl + "/tryon?shop=" + encodeURIComponent(shop), opts)
+      fetch(self.config.proxyUrl + "/api/tryon?shop=" + encodeURIComponent(shop), opts)
         .then(function (r) {
           if (timeoutId) clearTimeout(timeoutId);
           if (!r.ok) {
