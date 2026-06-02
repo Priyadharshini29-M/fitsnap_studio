@@ -199,7 +199,7 @@ export async function action({ request }) {
       }),
     );
 
-    await api.syncProduct({
+    const phpResult = await api.syncProduct({
       shopify_product_id: shopifyProductId,
       shopify_product_gid: shopifyProductGid,
       handle: productHandle,
@@ -210,6 +210,13 @@ export async function action({ request }) {
       shopify_variants: shopifyVariants,
       is_tryon_enabled: enabled ? 1 : 0,
     });
+
+    if (!phpResult.ok) {
+      return new Response(
+        JSON.stringify({ ok: false, error: phpResult.error ?? "PHP sync failed" }),
+        { status: 502, headers: { "Content-Type": "application/json" } },
+      );
+    }
 
     const metafieldRes = await admin.graphql(
       `#graphql
@@ -601,6 +608,21 @@ function CollectionRow({
   }
 
   function handleToggleProduct(product) {
+    const newEnabled = !product.isTryonEnabled;
+    const updatedCollectionProducts = JSON.stringify(
+      collection.products.map((p) => ({
+        shopify_product_id: p.numericId,
+        shopify_product_gid: p.id,
+        title: p.title,
+        handle: p.handle,
+        vendor: p.vendor ?? null,
+        product_type: p.productType ?? null,
+        featured_image: p.featuredImage?.url ?? null,
+        price: p.price ?? null,
+        currency: p.currency ?? null,
+        is_tryon_enabled: p.id === product.id ? (newEnabled ? 1 : 0) : (p.isTryonEnabled ? 1 : 0),
+      })),
+    );
     const fd = new FormData();
     fd.set("intent", "toggle_product");
     fd.set("shopify_product_id", product.numericId);
@@ -609,8 +631,8 @@ function CollectionRow({
     fd.set("collection_id", collection.numericId);
     fd.set("collection_title", collection.title);
     fd.set("collection_handle", collection.handle);
-    fd.set("collection_products", collectionProductsPayload);
-    fd.set("enabled", String(!product.isTryonEnabled));
+    fd.set("collection_products", updatedCollectionProducts);
+    fd.set("enabled", String(newEnabled));
     submit(fd, { method: "post" });
   }
 

@@ -36,5 +36,6 @@ scopes = "read_products,write_products,read_orders"
 redirect_urls = [ "https://thefitsnap.fly.dev/api/auth" ]
 [app_proxy]
 url = "https://tryonapp.digifyce.com"
+
 prefix = "apps"
 subpath = "tryfit"
