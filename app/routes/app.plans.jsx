@@ -25,19 +25,28 @@ const PLAN_KEY_MAP = {
   pro:    "FitSnap Pro",
 };
 
-const PLAN_PRICES = { growth: 19, pro: 49 };
-
 // Numeric rank for upgrade vs downgrade label
 const PLAN_RANK = { free: 0, growth: 1, pro: 2 };
+
+// ─── Revalidation control ─────────────────────────────────────────────────────
+
+// When the action returns a billingUrl the user is about to be redirected away
+// from the page entirely. Revalidating the loader at that point is both wasted
+// work and a source of auth errors (the revalidation GET can trigger a Shopify
+// auth redirect that Shopify's admin interprets as "Application Error").
+export function shouldRevalidate({ actionResult, defaultShouldRevalidate }) {
+  if (actionResult?.billingUrl) return false;
+  return defaultShouldRevalidate;
+}
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export async function loader({ request }) {
   console.log("[loader] plans page start");
 
-  let session, admin;
+  let session;
   try {
-    ({ session, admin } = await authenticate.admin(request));
+    ({ session } = await authenticate.admin(request));
     console.log("[loader] authenticated shop:", session?.shop);
   } catch (authErr) {
     // Re-throw Shopify auth Responses (redirects, 401s) — do NOT swallow them
@@ -50,39 +59,9 @@ export async function loader({ request }) {
   const apiKey = await ensureMerchant(session);
   const api    = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
-  const url         = new URL(request.url);
-  const chargeId    = url.searchParams.get("charge_id");
-  const pendingPlan = url.searchParams.get("plan");
-
-  // ── Post-billing callback: verify subscription ────────────────────────────
-  if (chargeId && pendingPlan && PLAN_KEY_MAP[pendingPlan]) {
-    console.log("[loader] verifying charge_id for plan:", pendingPlan);
-    try {
-      const gqlRes = await admin.graphql(`
-        #graphql
-        query {
-          currentAppInstallation {
-            activeSubscriptions { name status }
-          }
-        }
-      `);
-      const gqlData    = await gqlRes.json();
-      const activeSubs = gqlData?.data?.currentAppInstallation?.activeSubscriptions ?? [];
-      const isActive   = activeSubs.some(
-        (s) => s.name === PLAN_KEY_MAP[pendingPlan] && s.status === "ACTIVE"
-      );
-
-      if (isActive) {
-        console.log("[loader] subscription active, updating plan:", pendingPlan);
-        await api.updatePlan(pendingPlan);
-        return redirect("/app/plans");
-      }
-      console.log("[loader] subscription not active, billing declined");
-    } catch (verifyErr) {
-      console.error("[loader] charge verification error:", verifyErr?.message ?? verifyErr);
-    }
-    return redirect("/app/plans?billing_declined=1");
-  }
+  const url             = new URL(request.url);
+  const billingDeclined = url.searchParams.get("billing_declined") === "1";
+  const planUpgraded    = url.searchParams.get("plan_upgraded")    === "1";
 
   // ── Normal load ───────────────────────────────────────────────────────────
   let planRes;
@@ -93,10 +72,8 @@ export async function loader({ request }) {
     planRes = { ok: false };
   }
 
-  const planData        = planRes.ok ? planRes.data : null;
-  const rawPlan        = planData?.plan ?? "free";
-  const billingDeclined = url.searchParams.get("billing_declined") === "1";
-  const planUpgraded    = url.searchParams.get("plan_upgraded")    === "1";
+  const planData = planRes.ok ? planRes.data : null;
+  const rawPlan  = planData?.plan ?? "free";
 
   console.log("[loader] current plan:", rawPlan, "upgraded:", planUpgraded);
 
@@ -115,13 +92,19 @@ export async function action({ request }) {
   console.log("[action] plans action start");
 
   // ── Authenticate ──────────────────────────────────────────────────────────
-  let admin, session;
+  let admin, session, billing;
   try {
-    ({ admin, session } = await authenticate.admin(request));
+    ({ admin, session, billing } = await authenticate.admin(request));
     console.log("[action] authenticated shop:", session?.shop);
   } catch (authErr) {
-    // Re-throw Shopify auth Responses (redirects, 401s) — do NOT swallow them
-    if (authErr instanceof Response) throw authErr;
+    if (authErr instanceof Response) {
+      // Only re-throw redirect Responses (3xx) so React Router can follow the
+      // Shopify auth flow. Re-throwing 4xx/5xx error Responses causes Shopify's
+      // admin to show "Application Error" instead of our route's ErrorBoundary.
+      if (authErr.status >= 300 && authErr.status < 400) throw authErr;
+      console.error("[action] auth error response:", authErr.status, authErr.statusText);
+      return { error: "Session error. Please refresh the page and try again." };
+    }
     console.error("[action] authentication error:", authErr?.message ?? authErr);
     return { error: `Authentication error: ${authErr?.message ?? "Unknown"}` };
   }
@@ -141,33 +124,21 @@ export async function action({ request }) {
   if (planName === "free") {
     console.log("[action] downgrading to free plan");
     try {
-      const gqlRes = await admin.graphql(`
-        #graphql
-        query GetActiveSubscriptions {
-          currentAppInstallation {
-            activeSubscriptions { id name status }
-          }
-        }
-      `);
-      const gqlData    = await gqlRes.json();
-      const activeSubs = gqlData?.data?.currentAppInstallation?.activeSubscriptions ?? [];
-
-      for (const sub of activeSubs) {
-        if (sub.status === "ACTIVE") {
-          console.log("[action] cancelling subscription:", sub.id);
-          await admin.graphql(
-            `#graphql
-            mutation CancelSubscription($id: ID!) {
-              appSubscriptionCancel(id: $id) {
-                appSubscription { id status }
-                userErrors { field message }
-              }
-            }`,
-            { variables: { id: sub.id } }
-          );
-        }
+      // SDK billing.check / billing.cancel are safe — they return data, never throw Responses
+      const billingCheck = await billing.check({
+        plans: ["FitSnap Growth", "FitSnap Pro"],
+        isTest: NODE_ENV !== "production",
+      });
+      for (const sub of billingCheck.appSubscriptions ?? []) {
+        console.log("[action] cancelling subscription:", sub.id);
+        await billing.cancel({
+          subscriptionId: sub.id,
+          isTest: NODE_ENV !== "production",
+          prorate: true,
+        });
       }
     } catch (cancelErr) {
+      if (cancelErr instanceof Response && cancelErr.status >= 300 && cancelErr.status < 400) throw cancelErr;
       console.error("[action] subscription cancel error:", cancelErr?.message ?? cancelErr);
       // Non-fatal — continue to update PHP backend
     }
@@ -178,17 +149,18 @@ export async function action({ request }) {
       console.log("[action] PHP plan updated to free");
     } catch (phpErr) {
       console.error("[action] PHP update error:", phpErr?.message ?? phpErr);
-      // Non-blocking — plan will reconcile on next load
     }
 
     return redirect("/app/plans");
   }
 
   // ── Upgrade / switch paid plan ────────────────────────────────────────────
+  // We call the Shopify Billing API (appSubscriptionCreate) directly via admin.graphql()
+  // instead of billing.request() because billing.request() throws a 401 Response for
+  // XHR form submissions, which React Router intercepts as an action error before
+  // App Bridge can redirect the user — causing "Application Error" in embedded context.
   const planKey = PLAN_KEY_MAP[planName];
-  const amount  = PLAN_PRICES[planName];
-
-  if (!planKey || !amount) {
+  if (!planKey) {
     console.error("[action] invalid plan selected:", planName);
     return { error: "Invalid plan selected. Please try again." };
   }
@@ -228,7 +200,7 @@ export async function action({ request }) {
           lineItems: [{
             plan: {
               appRecurringPricingDetails: {
-                price: { amount: String(amount), currencyCode: "USD" },
+                price: { amount: planName === "growth" ? "19.00" : "49.00", currencyCode: "USD" },
                 interval: "EVERY_30_DAYS",
               },
             },
@@ -243,18 +215,20 @@ export async function action({ request }) {
 
     if (userErrors.length > 0) {
       console.error("[action] GraphQL userErrors:", JSON.stringify(userErrors));
+      return { error: userErrors[0]?.message ?? "Could not create subscription." };
     }
 
     if (!confirmationUrl) {
-      const msg = userErrors[0]?.message ?? "Could not create subscription. Please try again.";
-      console.error("[action] no confirmationUrl returned:", msg);
-      return { error: msg };
+      console.error("[action] no confirmationUrl returned");
+      return { error: "Could not create subscription. Please try again." };
     }
 
-    console.log("[action] subscription created, confirmationUrl received");
+    console.log("[action] subscription created, returning billingUrl");
+    // Return the URL as data — the component navigates via window.top.location.href
+    // (Shopify grants allow-top-navigation to the embedded app iframe)
     return { billingUrl: confirmationUrl };
   } catch (billingErr) {
-    console.error("[action] billing GraphQL error:", billingErr?.message ?? billingErr);
+    console.error("[action] billing error:", billingErr?.message ?? billingErr);
     return { error: "Billing service error. Please try again or contact support." };
   }
 }
@@ -407,74 +381,7 @@ function Chevron({ open }) {
   );
 }
 
-// ─── Usage meter ──────────────────────────────────────────────────────────────
-
-function UsageMeter({ used, limit, plan }) {
-  const pct      = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-  const danger   = pct >= 90;
-  const warn     = pct >= 70;
-  const barColor = danger ? "#EF4444" : warn ? "#F59E0B" : "#1D9E75";
-
-  return (
-    <div
-      style={{
-        background: "#fff",
-        border: "1px solid #E5E7EB",
-        borderRadius: "12px",
-        padding: "20px 24px",
-        marginBottom: "32px",
-        maxWidth: "520px",
-        margin: "0 auto 32px",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "10px",
-        }}
-      >
-        <span style={{ fontSize: "13px", fontWeight: 600, color: "#374151" }}>
-          Monthly Try-On Usage
-        </span>
-        <span style={{ fontSize: "13px", color: "#6B7280" }}>
-          {used} / {limit} used
-        </span>
-      </div>
-      <div
-        style={{
-          height: "6px",
-          background: "#F3F4F6",
-          borderRadius: "999px",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            height: "100%",
-            width: `${pct}%`,
-            background: barColor,
-            borderRadius: "999px",
-            transition: "width 0.4s ease",
-          }}
-        />
-      </div>
-      {danger && (
-        <p
-          style={{
-            fontSize: "12px",
-            color: "#EF4444",
-            marginTop: "8px",
-            fontWeight: 500,
-          }}
-        >
-          You&apos;ve used {pct}% of your {plan} plan quota. Additional try-ons will be charged per use.
-        </p>
-      )}
-    </div>
-  );
-}
+// Usage meter removed per request.
 
 // ─── Plan card ────────────────────────────────────────────────────────────────
 
@@ -598,18 +505,18 @@ export default function Plans() {
   const navigate     = useNavigate();
   const isSubmitting = navigation.state === "submitting";
 
-  // Auto-redirect to Shopify billing page as soon as we have the URL.
-  // window.top.location.href works in Shopify's embedded iframe (allow-top-navigation).
-  // The button below is the fallback if the browser blocks the automatic redirect.
+  // Navigate top window to Shopify billing confirmation page.
+  // Shopify grants allow-top-navigation to the embedded app iframe.
   useEffect(() => {
     if (!actionData?.billingUrl) return;
     try {
       window.top.location.href = actionData.billingUrl;
     } catch {
-      // Cross-origin blocked — user will click the button below
+      // Cross-origin blocked — fallback link is shown below
     }
   }, [actionData?.billingUrl]);
 
+  // While redirecting to billing, show an interim screen with a manual fallback link
   if (actionData?.billingUrl) {
     return (
       <Page backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
@@ -705,8 +612,7 @@ export default function Plans() {
           </p>
         </div>
 
-        {/* Usage meter */}
-        <UsageMeter used={usedTryons} limit={limitTryons} plan={currentPlan} />
+        {/* Usage meter removed */}
 
         {/* Cards grid */}
         <div className="vto-plan-grid">

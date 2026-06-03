@@ -1,33 +1,34 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
-
+ 
 client_id = "876421af61b2135a56534b6b182909bd"
 name = "The Fit Snap"
 application_url = "https://thefitsnap.fly.dev"
 embedded = true
-
+ 
 [build]
 automatically_update_urls_on_dev = false
-
+ 
 [webhooks]
 api_version = "2026-04"
-
+ 
   [[webhooks.subscriptions]]
   uri = "/api/webhook"
   topics = [ "orders/paid", "app/uninstalled" ]
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
-
+ 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_orders,read_products,write_products"
-
+ 
 [auth]
 redirect_urls = [
   "https://thefitsnap.fly.dev/auth/callback",
   "https://thefitsnap.fly.dev/auth/shopify/callback",
   "https://thefitsnap.fly.dev/api/auth/callback"
 ]
-
+ 
 [app_proxy]
-url = "https://thefitsnap.fly.dev"
+url = "https://tryonapp.digifyce.com/"
 prefix = "apps"
+ 
 subpath = "tryfit"
