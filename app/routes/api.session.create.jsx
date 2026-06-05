@@ -1,5 +1,8 @@
 import { createHmac } from "node:crypto";
+import https from "node:https";
 import { SHOPIFY_API_SECRET, PHP_API_URL, PHP_API_SECRET } from "../lib/env.server";
+
+const phpHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 export const loader = () => new Response("Not Found", { status: 404 });
 
@@ -25,35 +28,52 @@ export const action = async ({ request }) => {
     return Response.json({ error: "Service not configured" }, { status: 503 });
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  // Shopify app proxy always appends ?shop=mystore.myshopify.com
+  const shopDomain = url.searchParams.get("shop") ?? null;
 
-  try {
-    const res = await fetch(`${phpBase}/session/create`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": PHP_API_SECRET,
-      },
-      body: JSON.stringify({
-        product_id: body.product_id ?? null,
-        variant_id: body.variant_id ?? null,
-        device_type: body.device_type ?? null,
-      }),
-      signal: controller.signal,
-    });
+  const sessionUrl = shopDomain
+    ? `${phpBase}/session/create?shop=${encodeURIComponent(shopDomain)}`
+    : `${phpBase}/session/create`;
 
-    clearTimeout(timer);
-    const data = await res.json().catch(() => ({}));
-    return Response.json(data, { status: res.ok ? 200 : res.status });
-  } catch (err) {
-    clearTimeout(timer);
-    const isAbort = err instanceof Error && err.name === "AbortError";
-    return Response.json(
-      { error: isAbort ? "Request timed out" : "Session creation failed" },
-      { status: isAbort ? 504 : 500 },
+  const reqBody = JSON.stringify({
+    product_id: body.product_id ?? null,
+    variant_id: body.variant_id ?? null,
+    device_type: body.device_type ?? null,
+  });
+
+  const headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "X-Api-Key": PHP_API_SECRET,
+    "Content-Length": Buffer.byteLength(reqBody).toString(),
+  };
+  if (shopDomain) headers["X-Shop-Domain"] = shopDomain;
+
+  const parsed = new URL(sessionUrl);
+
+  const result = await new Promise((resolve) => {
+    const timer = setTimeout(() => { req.destroy(); resolve({ status: 504, data: { error: "Request timed out" } }); }, 10_000);
+
+    const req = https.request(
+      { hostname: parsed.hostname, port: parsed.port || 443, path: parsed.pathname + parsed.search, method: "POST", headers, agent: phpHttpsAgent },
+      (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => { raw += c; });
+        res.on("end", () => {
+          clearTimeout(timer);
+          let data = {};
+          try { data = JSON.parse(raw); } catch { data = {}; }
+          resolve({ status: res.statusCode, data });
+        });
+      }
     );
-  }
+    req.on("error", (err) => { clearTimeout(timer); resolve({ status: 500, data: { error: err.message } }); });
+    req.write(reqBody);
+    req.end();
+  });
+
+  return Response.json(result.data, { status: result.status >= 200 && result.status < 300 ? 200 : result.status });
 };
 
 function verifyShopifyProxySignature(searchParams, secret) {

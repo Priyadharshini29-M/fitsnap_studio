@@ -1,5 +1,10 @@
 import { createHmac } from "node:crypto";
+import https from "node:https";
 import { SHOPIFY_API_SECRET, PHP_API_URL, PHP_API_SECRET } from "../lib/env.server";
+
+// PHP backend has a missing intermediate CA that Node.js can't verify.
+// We bypass SSL only for these server-to-server calls to the PHP backend.
+const phpHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 /**
  * Server-side try-on proxy.
@@ -8,6 +13,16 @@ import { SHOPIFY_API_SECRET, PHP_API_URL, PHP_API_SECRET } from "../lib/env.serv
 export const loader = () => new Response("Not Found", { status: 404 });
 
 export const action = async ({ request }) => {
+  try {
+    return await handleTryOn(request);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[api.tryon] unhandled exception:", msg, err?.stack);
+    return Response.json({ error: `Server error: ${msg}` }, { status: 500 });
+  }
+};
+
+async function handleTryOn(request) {
   if (request.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
   }
@@ -47,6 +62,16 @@ export const action = async ({ request }) => {
 
   const phpBase   = (PHP_API_URL).replace(/\/$/, "");
   const phpSecret = PHP_API_SECRET;
+  // Shopify app proxy always appends ?shop=mystore.myshopify.com
+  const shopDomain = url.searchParams.get("shop") ?? null;
+
+  console.log("[api.tryon] incoming request", {
+    shop: shopDomain,
+    variant_id,
+    product_id,
+    clothing_image: clothing_image?.substring(0, 80),
+    has_avatar: Boolean(avatar_image),
+  });
 
   // Guard: PHP backend not configured
   if (!phpBase) {
@@ -55,7 +80,7 @@ export const action = async ({ request }) => {
   }
 
   // ── Check plan limit (temporarily disabled) ──────────────────
-  // const limitRes = await fetchPhp(phpBase, phpSecret, "GET", "/plan/limit", null, 10_000);
+  // const limitRes = await fetchPhp(phpBase, phpSecret, "GET", "/plan/limit", null, shopDomain, 10_000);
   // if (!limitRes.ok) {
   //   return Response.json({ error: limitRes.error || "Plan check failed" }, { status: 503 });
   // }
@@ -70,11 +95,13 @@ export const action = async ({ request }) => {
   // }
 
   // ── Create session ────────────────────────────────────────────
+  console.log("[api.tryon] calling PHP /session/create", { shop: shopDomain, product_id, variant_id });
   const sessRes = await fetchPhp(phpBase, phpSecret, "POST", "/session/create", {
     product_id:  product_id  ?? null,
     variant_id:  variant_id  ?? null,
     device_type: device_type ?? null,
-  }, 10_000);
+  }, shopDomain, 10_000);
+  console.log("[api.tryon] session/create response", { ok: sessRes.ok, data: sessRes.data, error: sessRes.error });
 
   const sessionId = sessRes.ok ? sessRes.data?.session_id : (client_session ?? null);
 
@@ -92,7 +119,9 @@ export const action = async ({ request }) => {
     seed,
   };
 
-  const tryOnRes = await fetchPhp(phpBase, phpSecret, "POST", "/tryon", tryOnPayload, 90_000);
+  console.log("[api.tryon] calling PHP /tryon", { shop: shopDomain, session_id: sessionId, clothing_image: clothing_image?.substring(0, 80) });
+  const tryOnRes = await fetchPhp(phpBase, phpSecret, "POST", "/tryon", tryOnPayload, shopDomain, 90_000);
+  console.log("[api.tryon] /tryon response", { ok: tryOnRes.ok, has_result: Boolean(tryOnRes.data?.result_image), error: tryOnRes.error, httpStatus: tryOnRes.httpStatus });
 
   if (!tryOnRes.ok || !tryOnRes.data?.result_image) {
     let errMsg;
@@ -118,7 +147,7 @@ export const action = async ({ request }) => {
         session_id: sessionId,
         status: "failed",
         error_message: errMsg,
-      }, 5_000).catch(() => {});
+      }, shopDomain, 5_000).catch(() => {});
     }
 
     const status = tryOnRes.timedOut ? 504 : (tryOnRes.httpStatus || 500);
@@ -141,7 +170,7 @@ export const action = async ({ request }) => {
       result_image_url: resultImage,
       result_seed: resultSeed,
       result_expires_at: expiresAt,
-    }, 5_000).catch(() => {});
+    }, shopDomain, 5_000).catch(() => {});
   }
 
   return Response.json({ result_image: resultImage, seed: resultSeed, session_id: sessionId });
@@ -149,45 +178,66 @@ export const action = async ({ request }) => {
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-async function fetchPhp(base, apiKey, method, path, body, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  // path="" means the root api.php endpoint
-  const url = path ? `${base}${path}` : base;
-
-  try {
-    const init = {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": apiKey,
-      },
-      signal: controller.signal,
-    };
-
-    if (body !== null && method !== "GET") {
-      init.body = JSON.stringify(body);
-    }
-
-    const res = await fetch(url, init);
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      return { ok: false, error: data.error || `HTTP ${res.status}`, httpStatus: res.status, data: null };
-    }
-    return { ok: true, data };
-  } catch (err) {
-    const isAbort = err instanceof Error && err.name === "AbortError";
-    return {
-      ok: false,
-      timedOut: isAbort,
-      error: isAbort ? "Request timed out" : (err?.message ?? "Network error"),
-      data: null,
-    };
-  } finally {
-    clearTimeout(timer);
+function fetchPhp(base, apiKey, method, path, body, shopDomain, timeoutMs) {
+  // Build URL with ?shop= on all requests
+  let urlStr = path ? `${base}${path}` : base;
+  if (shopDomain && !urlStr.includes("shop=")) {
+    const sep = urlStr.includes("?") ? "&" : "?";
+    urlStr = `${urlStr}${sep}shop=${encodeURIComponent(shopDomain)}`;
   }
+
+  const headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "X-Api-Key": apiKey,
+  };
+  if (shopDomain) headers["X-Shop-Domain"] = shopDomain;
+
+  const bodyStr = body !== null && method !== "GET" ? JSON.stringify(body) : null;
+  if (bodyStr) headers["Content-Length"] = Buffer.byteLength(bodyStr).toString();
+
+  const parsed = new URL(urlStr);
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      req.destroy();
+      resolve({ ok: false, timedOut: true, error: "Request timed out", data: null });
+    }, timeoutMs);
+
+    const req = https.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port || 443,
+        path: parsed.pathname + parsed.search,
+        method,
+        headers,
+        agent: phpHttpsAgent,
+      },
+      (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { raw += chunk; });
+        res.on("end", () => {
+          clearTimeout(timer);
+          let data = {};
+          try { data = JSON.parse(raw); } catch { data = {}; }
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            resolve({ ok: false, error: data.error || `HTTP ${res.statusCode}`, httpStatus: res.statusCode, data: null });
+          } else {
+            resolve({ ok: true, data });
+          }
+        });
+      }
+    );
+
+    req.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, timedOut: false, error: err.message ?? "Network error", data: null });
+    });
+
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
 }
 
 /**

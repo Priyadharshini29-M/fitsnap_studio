@@ -13,6 +13,7 @@ import {
   Select,
   Button,
   Badge,
+  Banner,
   Divider,
   Thumbnail,
 } from "@shopify/polaris";
@@ -71,24 +72,92 @@ export async function loader({ request }) {
     is_tryon_enabled: 1,
   });
 
-  const internalId = syncRes.ok ? syncRes.data?.id : null;
+  const sd = syncRes.data ?? {};
+  const internalId = syncRes.ok
+    ? (sd.id ?? sd.product_id ?? sd.internal_id ?? sd.data?.id ?? null)
+    : null;
+
+  const syncError = !syncRes.ok ? (syncRes.error ?? null) : null;
 
   const mappingsRes = internalId
     ? await api.getVariantMappings(internalId)
     : { ok: true, data: [] };
-  const mappings = mappingsRes.ok ? mappingsRes.data ?? [] : [];
+  const mappings = mappingsRes.ok ? (mappingsRes.data ?? []) : [];
 
-  return { product, variants, mappings, productImages, internalId, productId, currentPlan };
+  // Prefer the product_id that PHP itself stored inside an existing mapping —
+  // this guarantees we send the correct PHP internal FK even when syncProduct
+  // returns a different id field (e.g. the Shopify product ID).
+  const existingMapping = mappings[0] ?? null;
+  const resolvedProductId = existingMapping?.product_id ?? internalId;
+
+  return { product, variants, mappings, productImages, internalId: resolvedProductId, productId, currentPlan, syncError };
 }
 
 export async function action({ request }) {
   const { admin, session } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
   const body = await request.json();
-  const api  = phpApiClient(apiKey, PHP_API_URL, session.shop);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
-  const res = await api.saveVariantMapping(body);
-  if (!res.ok) return { ok: false, error: res.error ?? null };
+  // Diagnostic: raw PHP test — returns full status + body for inspection
+  if (body._action === "test_php") {
+    const testUrl = `${PHP_API_URL.replace(/\/$/, "")}/variants/mapping`;
+    const testPayload = {
+      product_id:          body.product_id ?? null,
+      shopify_product_id:  body.shopify_product_id ?? null,
+      shopify_variant_id:  body.shopify_variant_id,
+      shopify_variant_gid: body.shopify_variant_gid,
+      variant_title:       body.variant_title ?? null,
+      tryon_image_url:     "https://cdn.shopify.com/test.jpg",
+      image_type:          "flat_lay",
+      garment_type:        "top",
+      avatar_sex:          null,
+      clothing_prompt:     null,
+    };
+    try {
+      const r = await fetch(testUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "X-Api-Key": apiKey,
+          "X-Shop-Domain": session.shop,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify(testPayload),
+      });
+      const text = await r.text();
+      return { _test: true, status: r.status, phpBody: text.slice(0, 1000), sentPayload: testPayload };
+    } catch (err) {
+      return { _test: true, status: 0, phpBody: err?.message ?? "fetch failed", sentPayload: testPayload };
+    }
+  }
+
+  // mapping_id = existing PHP record PK → use PUT (update)
+  // no mapping_id → use POST (create)
+  const mappingRecordId = body.mapping_id ?? null;
+
+  const phpPayload = {
+    product_id:          body.product_id         ?? null,
+    shopify_product_id:  body.shopify_product_id ?? null,
+    shopify_product_gid: body.product_gid        ?? null,
+    shopify_variant_id:  body.shopify_variant_id,
+    shopify_variant_gid: body.shopify_variant_gid,
+    variant_title:       body.variant_title      ?? null,
+    tryon_image_url:     body.tryon_image_url,
+    image_type:          body.image_type         ?? "flat_lay",
+    garment_type:        body.garment_type       ?? "top",
+    avatar_sex:          body.avatar_sex         ?? null,
+    clothing_prompt:     body.clothing_prompt    ?? null,
+  };
+
+  const res = mappingRecordId
+    ? await api.updateVariantMapping(mappingRecordId, phpPayload)
+    : await api.saveVariantMapping(phpPayload);
+
+  if (!res.ok) {
+    return { ok: false, error: res.error ?? "Save failed. Please try again.", variant_id: body.shopify_variant_id };
+  }
 
   // After saving, re-fetch all mappings for this product and write to
   // the Shopify metafield so the storefront widget can read them.
@@ -152,7 +221,7 @@ const GARMENT_TYPE_OPTIONS = [
   { label: "Full body (saree, dress, jumpsuit…)", value: "full" },
 ];
 
-function VariantRow({ variant, mapping, productImages, internalProductId, productGid }) {
+function VariantRow({ variant, mapping, productImages, internalProductId, productGid, shopifyProductId }) {
   const submit     = useSubmit();
   const navigation = useNavigation();
   const numericId  = variant.id.replace("gid://shopify/ProductVariant/", "");
@@ -162,7 +231,8 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
   const [garmentType,  setGarmentType]  = useState(mapping?.garment_type    ?? "top");
   const [avatarSex,    setAvatarSex]    = useState(mapping?.avatar_sex      ?? "");
   const [prompt,       setPrompt]       = useState(mapping?.clothing_prompt ?? "");
-  const [saved,        setSaved]        = useState(false);
+  const [saved,      setSaved]      = useState(false);
+  const [saveError,  setSaveError]  = useState(null);
 
   const actionData = useActionData();
 
@@ -175,18 +245,23 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
     setPrompt(mapping?.clothing_prompt ?? "");
   }, [mapping]);
 
-  // Show "Saved!" toast only if action was successful for THIS variant
+  // Handle save response for THIS variant only
   useEffect(() => {
-    if (actionData?.ok && actionData?.variant_id === numericId) {
+    if (!actionData || String(actionData.variant_id) !== numericId) return;
+    if (actionData.ok) {
       setSaved(true);
+      setSaveError(null);
       const timer = setTimeout(() => setSaved(false), 2000);
       return () => clearTimeout(timer);
+    } else {
+      setSaveError(actionData.error ?? "Save failed. Please try again.");
     }
   }, [actionData, numericId]);
 
-  const isMapped  = Boolean(mapping?.tryon_image_url);
-  const isSaving  = navigation.state === "submitting" && 
-                    navigation.formData?.get("shopify_variant_id") === numericId;
+  const isMapped = Boolean(mapping?.tryon_image_url);
+  // navigation.formData is null for JSON submissions; use navigation.json instead
+  const isSaving = navigation.state === "submitting" &&
+    String(navigation.json?.shopify_variant_id ?? navigation.formData?.get("shopify_variant_id")) === numericId;
 
   const imageOptions = [
     { label: "Enter URL below", value: "" },
@@ -201,19 +276,26 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
 
   const handleSave = () => {
     if (!imageUrl.trim()) return;
-    setSaved(false); // Reset before submitting
+    setSaved(false);
+    setSaveError(null);
+    // mapping.product_id = PHP's internal FK (most reliable source)
+    // mapping.id / mapping_id / variant_id = existing record's PK for upsert
+    const phpProductId   = mapping?.product_id ?? internalProductId;
+    const existingId     = mapping?.id ?? mapping?.mapping_id ?? mapping?.variant_id ?? null;
     submit(
       {
-        product_id:           internalProductId,
-        product_gid:          productGid,
-        shopify_variant_id:   numericId,
-        shopify_variant_gid:  variant.id,
-        variant_title:        variant.title,
-        tryon_image_url:      imageUrl.trim(),
-        image_type:           imageType,
-        garment_type:         garmentType,
-        avatar_sex:           avatarSex || null,
-        clothing_prompt:      prompt.trim() || null,
+        ...(existingId ? { mapping_id: existingId } : {}),
+        product_id:          phpProductId,
+        shopify_product_id:  shopifyProductId ?? null,
+        product_gid:         productGid,
+        shopify_variant_id:  numericId,
+        shopify_variant_gid: variant.id,
+        variant_title:       variant.title,
+        tryon_image_url:     imageUrl.trim(),
+        image_type:          imageType,
+        garment_type:        garmentType,
+        avatar_sex:          avatarSex || null,
+        clothing_prompt:     prompt.trim() || null,
       },
       { method: "post", encType: "application/json" }
     );
@@ -221,6 +303,11 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
 
   return (
     <BlockStack gap="300">
+      {saveError && (
+        <Banner tone="critical" onDismiss={() => setSaveError(null)}>
+          <p>{saveError}</p>
+        </Banner>
+      )}
       <InlineStack align="space-between" blockAlign="center">
         <InlineStack gap="200" blockAlign="center">
           {variant.image?.url && (
@@ -293,7 +380,7 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
         size="slim"
         onClick={handleSave}
         loading={isSaving}
-        disabled={!imageUrl.trim()}
+        disabled={!imageUrl.trim() || !internalProductId}
       >
         {saved ? "Saved!" : "Save"}
       </Button>
@@ -302,8 +389,12 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
 }
 
 export default function Variants() {
-  const { product, variants, mappings, productImages, internalId, productId, currentPlan } = useLoaderData();
+  const { product, variants, mappings, productImages, internalId, productId, currentPlan, syncError } = useLoaderData();
+  const actionData = useActionData();
+  const submit = useSubmit();
   const navigate = useNavigate();
+
+  const testResult = actionData?._test ? actionData : null;
 
   if (!product) {
     return (
@@ -335,6 +426,47 @@ export default function Variants() {
       <Layout>
         <Layout.Section>
           <BlockStack gap="400">
+            {syncError && (
+              <Banner tone="critical">
+                <p>{syncError}</p>
+              </Banner>
+            )}
+
+            {/* PHP endpoint test — remove once variant save is confirmed working */}
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h3" variant="headingSm">PHP Endpoint Test</Text>
+                <InlineStack gap="200">
+                  <Button
+                    size="slim"
+                    onClick={() => {
+                      // Test POST with an unmapped variant (if any), else first variant
+                      const unmapped = variants.find(v => {
+                        const nId = v.id.replace("gid://shopify/ProductVariant/", "");
+                        return !mappingsByVariant[nId];
+                      }) ?? variants[0];
+                      const numId = unmapped?.id?.replace("gid://shopify/ProductVariant/", "") ?? "";
+                      submit(
+                        { _action: "test_php", product_id: internalId, shopify_product_id: productId,
+                          shopify_variant_id: numId, shopify_variant_gid: unmapped?.id ?? "",
+                          variant_title: unmapped?.title ?? "" },
+                        { method: "post", encType: "application/json" }
+                      );
+                    }}
+                  >
+                    Test POST (new mapping)
+                  </Button>
+                </InlineStack>
+                {testResult && (
+                  <Banner tone={testResult.status >= 200 && testResult.status < 300 ? "success" : "critical"}>
+                    <p><strong>HTTP {testResult.status}</strong></p>
+                    <p><strong>PHP response:</strong> {testResult.phpBody || "(empty body)"}</p>
+                    <p><strong>Sent:</strong> {JSON.stringify(testResult.sentPayload).slice(0, 300)}</p>
+                  </Banner>
+                )}
+              </BlockStack>
+            </Card>
+
             {variants.map((variant, idx) => {
               const numericId = variant.id.replace("gid://shopify/ProductVariant/", "");
               return (
@@ -345,6 +477,7 @@ export default function Variants() {
                     productImages={productImages}
                     internalProductId={internalId}
                     productGid={product.id}
+                    shopifyProductId={productId}
                   />
                   {idx < variants.length - 1 && <Divider />}
                 </Card>

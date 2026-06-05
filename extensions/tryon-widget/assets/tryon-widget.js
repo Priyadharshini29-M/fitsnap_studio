@@ -809,6 +809,15 @@
       var btn = document.getElementById("tryfit-open-btn");
       var embedRoot = document.getElementById("tryfit-embed-root");
 
+      // ── Watermark — apply before any early-return ────────────────────────
+      // Default visible; only hidden when server explicitly sends show_watermark:false
+      // (paid plans with branding removed). Free/basic plans always show it.
+      var watermarkEl = document.getElementById("tryfit-watermark");
+      if (watermarkEl) {
+        var showWm = s.show_watermark;
+        watermarkEl.style.display = (showWm === false || showWm === 0 || showWm === "0" || showWm === "false") ? "none" : "";
+      }
+
       // ── CSS custom properties ─────────────────────────────────────────────
       // Apply before any early-return so collection pages (which have no
       // #tryfit-open-btn) still get the correct merchant colors on the modal.

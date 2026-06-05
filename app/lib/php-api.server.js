@@ -9,54 +9,74 @@
  *                                          scope data to the correct shop even
  *                                          if the api_key lookup fails
  */
+import https from "node:https";
+const phpHttpsAgent = new https.Agent({ rejectUnauthorized: false });
+
 export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
   const base = baseUrl.replace(/\/$/, '');
 
-  async function request(method, path, body = null, timeoutMs = 10_000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const headers = {
-        'X-Api-Key': apiKey,
-        'Content-Type': 'application/json',
-      };
-
-      if (shopDomain) {
-        headers['X-Shop-Domain'] = shopDomain;
-      }
-
-      const init = { method, headers, signal: controller.signal };
-
-      if (body !== null) {
-        init.body = JSON.stringify(body);
-      }
-
-      // Append shop as query param on GET requests for extra scoping
-      let url = `${base}${path}`;
-      if (shopDomain && method === 'GET' && !path.includes('shop=')) {
-        const sep = path.includes('?') ? '&' : '?';
-        url = `${url}${sep}shop=${encodeURIComponent(shopDomain)}`;
-      }
-
-      const res = await fetch(url, init);
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        return { ok: false, error: data.error ?? 'Request failed', status: res.status };
-      }
-
-      return { ok: true, data };
-    } catch (err) {
-      const isAbort = err instanceof Error && err.name === 'AbortError';
-      return {
-        ok: false,
-        error: isAbort ? 'Request timed out' : (err?.message ?? 'Network error'),
-        status: 0,
-      };
-    } finally {
-      clearTimeout(timer);
+  function request(method, path, body = null, timeoutMs = 10_000) {
+    if (!base) {
+      return Promise.resolve({ ok: false, error: 'PHP_API_URL is not configured on this server.', status: 0 });
     }
+
+    // Append shop as query param on GET requests for extra scoping
+    let urlStr = `${base}${path}`;
+    if (shopDomain && method === 'GET' && !path.includes('shop=')) {
+      const sep = path.includes('?') ? '&' : '?';
+      urlStr = `${urlStr}${sep}shop=${encodeURIComponent(shopDomain)}`;
+    }
+    // POST/PUT/PATCH: also append shop so PHP can always scope
+    if (shopDomain && method !== 'GET' && !urlStr.includes('shop=')) {
+      const sep = urlStr.includes('?') ? '&' : '?';
+      urlStr = `${urlStr}${sep}shop=${encodeURIComponent(shopDomain)}`;
+    }
+
+    const headers = {
+      'X-Api-Key': apiKey,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    };
+    if (shopDomain) headers['X-Shop-Domain'] = shopDomain;
+
+    const bodyStr = body !== null ? JSON.stringify(body) : null;
+    if (bodyStr) headers['Content-Length'] = Buffer.byteLength(bodyStr).toString();
+
+    const parsed = new URL(urlStr);
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        req.destroy();
+        resolve({ ok: false, error: 'Request timed out', status: 0 });
+      }, timeoutMs);
+
+      const req = https.request(
+        { hostname: parsed.hostname, port: parsed.port || 443, path: parsed.pathname + parsed.search, method, headers, agent: phpHttpsAgent },
+        (res) => {
+          let raw = '';
+          res.setEncoding('utf8');
+          res.on('data', (c) => { raw += c; });
+          res.on('end', () => {
+            clearTimeout(timer);
+            let data = {};
+            try { data = JSON.parse(raw); } catch { data = {}; }
+            if (!res.ok && (res.statusCode < 200 || res.statusCode >= 300)) {
+              const errMsg = data.error ?? data.message ?? data.msg ?? data.detail ?? (Array.isArray(data.errors) ? data.errors[0] : null) ?? `Request failed (HTTP ${res.statusCode})`;
+              resolve({ ok: false, error: errMsg, status: res.statusCode });
+            } else {
+              resolve({ ok: true, data });
+            }
+          });
+        }
+      );
+      req.on('error', (err) => {
+        clearTimeout(timer);
+        resolve({ ok: false, error: err?.message ?? 'Network error', status: 0 });
+      });
+      if (bodyStr) req.write(bodyStr);
+      req.end();
+    });
   }
 
   return {
@@ -77,6 +97,9 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
 
     saveVariantMapping: (data) =>
       request('POST', '/variants/mapping', data),
+
+    updateVariantMapping: (id, data) =>
+      request('PUT', `/variants/mapping/${id}`, data),
 
     createSession: (data) =>
       request('POST', '/session/create', data, 35_000),

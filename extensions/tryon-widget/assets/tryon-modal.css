@@ -1145,11 +1145,26 @@
 
 /* ── Watermark ───────────────────────────────────────────────────────────── */
 .tryfit-watermark {
-  font-size:  11px;
-  color:      var(--tryfit-text-3);
-  text-align: center;
-  margin:     12px 0 0;
+  position:       absolute !important;
+  bottom:         8px !important;
+  right:          12px !important;
+  left:           auto !important;
+  transform:      none;
+  font-size:      10px;
+  color:          var(--tryfit-text-3);
   letter-spacing: 0.2px;
+  white-space:    nowrap;
+  pointer-events: auto;
+  z-index:        2;
+  margin:         0;
+}
+.tryfit-watermark-link {
+  color:           inherit;
+  text-decoration: none;
+  font-weight:     500;
+}
+.tryfit-watermark-link:hover {
+  text-decoration: underline;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1532,7 +1547,7 @@
   .tryfit-coupon-card      { margin-bottom: 10px; padding: 10px 12px; }
   .tryfit-reupload-row     { margin-top: 8px; margin-bottom: 8px; }
   .tryfit-step-header      { margin-bottom: 14px; }
-  .tryfit-watermark        { margin-top: 10px; }
+  .tryfit-watermark        { bottom: 6px !important; right: 10px !important; }
 
   /* Font sizes */
   .tryfit-heading    { font-size: 19px; }
@@ -1610,8 +1625,9 @@
   }
 
   .tryfit-watermark {
-    font-size:  10px;
-    margin-top: 8px;
+    font-size: 9px;
+    bottom:    6px !important;
+    right:     8px !important;
   }
 }
 
