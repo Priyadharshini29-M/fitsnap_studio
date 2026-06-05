@@ -99,9 +99,8 @@ export async function action({ request }) {
   const body = await request.json();
   const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
-  // Diagnostic: raw PHP test — returns full status + body for inspection
+  // Diagnostic: PHP test via the same SSL-safe client used for real saves
   if (body._action === "test_php") {
-    const testUrl = `${PHP_API_URL.replace(/\/$/, "")}/variants/mapping`;
     const testPayload = {
       product_id:          body.product_id ?? null,
       shopify_product_id:  body.shopify_product_id ?? null,
@@ -114,23 +113,13 @@ export async function action({ request }) {
       avatar_sex:          null,
       clothing_prompt:     null,
     };
-    try {
-      const r = await fetch(testUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-          "X-Api-Key": apiKey,
-          "X-Shop-Domain": session.shop,
-          "X-Requested-With": "XMLHttpRequest",
-        },
-        body: JSON.stringify(testPayload),
-      });
-      const text = await r.text();
-      return { _test: true, status: r.status, phpBody: text.slice(0, 1000), sentPayload: testPayload };
-    } catch (err) {
-      return { _test: true, status: 0, phpBody: err?.message ?? "fetch failed", sentPayload: testPayload };
-    }
+    const testRes = await api.saveVariantMapping(testPayload);
+    return {
+      _test:       true,
+      status:      testRes.ok ? 200 : (testRes.status ?? 500),
+      phpBody:     testRes.ok ? JSON.stringify(testRes.data) : (testRes.error ?? "unknown error"),
+      sentPayload: testPayload,
+    };
   }
 
   // mapping_id = existing PHP record PK → use PUT (update)
