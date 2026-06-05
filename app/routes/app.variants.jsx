@@ -122,10 +122,6 @@ export async function action({ request }) {
     };
   }
 
-  // mapping_id = existing PHP record PK → use PUT (update)
-  // no mapping_id → use POST (create)
-  const mappingRecordId = body.mapping_id ?? null;
-
   const phpPayload = {
     product_id:          body.product_id         ?? null,
     shopify_product_id:  body.shopify_product_id ?? null,
@@ -140,9 +136,8 @@ export async function action({ request }) {
     clothing_prompt:     body.clothing_prompt    ?? null,
   };
 
-  const res = mappingRecordId
-    ? await api.updateVariantMapping(mappingRecordId, phpPayload)
-    : await api.saveVariantMapping(phpPayload);
+  // Always POST — PHP does ON DUPLICATE KEY UPDATE (upsert) on shopify_variant_id
+  const res = await api.saveVariantMapping(phpPayload);
 
   if (!res.ok) {
     return { ok: false, error: res.error ?? "Save failed. Please try again.", variant_id: body.shopify_variant_id };
