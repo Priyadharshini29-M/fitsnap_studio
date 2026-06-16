@@ -1,6 +1,5 @@
 {%- assign app_enabled = shop.metafields.fitfyce.app_enabled | default: 'true' -%}
 {%- assign tryon_enabled = product.metafields.tryfit.tryon_enabled | default: 'false' -%}
-{%- assign variant_mappings_json = product.metafields.tryfit.variant_mappings | default: '{}' -%}
 
 {%- comment -%}
   Embed root: always rendered regardless of per-product enable state.
@@ -32,7 +31,7 @@
     data-shop="{{ shop.permanent_domain }}"
     data-variants="{{ product.variants | json | escape }}"
     data-options="{{ product.options | json | escape }}"
-    data-clothing-images="{{ variant_mappings_json }}"
+    data-clothing-images="{{ product.metafields.tryfit.variant_mappings | json | escape }}"
     data-product-images='{{ product.images | json | escape }}'
     data-selected-variant-id="{{ product.selected_or_first_available_variant.id }}"
     data-featured-image="{{ product.featured_image | image_url: width: 1024 }}"
@@ -56,7 +55,7 @@
       data-product-title="{{ product.title | escape }}"
       data-variants="{{ product.variants | json | escape }}"
       data-options="{{ product.options | json | escape }}"
-      data-clothing-images="{{ variant_mappings_json }}"
+      data-clothing-images="{{ product.metafields.tryfit.variant_mappings | json | escape }}"
       data-product-images='{{ product.images | json | escape }}'
       data-selected-variant-id="{{ product.selected_or_first_available_variant.id }}"
       data-featured-image="{{ product.featured_image | image_url: width: 1024 }}"
