@@ -18,6 +18,7 @@ RUN curl -fsSL https://github.com/benbjohnson/litestream/releases/download/v0.3.
 EXPOSE 3000
 WORKDIR /app
 ENV NODE_ENV=production
+ENV HOST=0.0.0.0
 
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force
@@ -27,4 +28,4 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/public ./public
 COPY dbsetup.js litestream.yml ./
 
-CMD ["node", "./dbsetup.js", "npm", "run", "start"]
+CMD ["node", "./dbsetup.js", "npm", "run", "docker-start"]
