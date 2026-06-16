@@ -25,3 +25,18 @@ export function planAtLeast(currentPlan, requiredPlan) {
   if (ri === -1 || ci === -1) return false;
   return ci >= ri;
 }
+
+// PHP backend stores plans as: basic / pro / premium
+// UI uses:                      free  / growth / pro
+const PHP_TO_UI = { basic: 'free', pro: 'growth', premium: 'pro' };
+const UI_TO_PHP = { free: 'basic', growth: 'pro', pro: 'premium' };
+
+/** Convert PHP plan name → UI plan key (e.g. "pro" → "growth"). */
+export function phpPlanToUi(phpPlan) {
+  return PHP_TO_UI[phpPlan] ?? 'free';
+}
+
+/** Convert UI plan key → PHP plan name (e.g. "growth" → "pro"). */
+export function uiPlanToPhp(uiPlan) {
+  return UI_TO_PHP[uiPlan] ?? 'basic';
+}

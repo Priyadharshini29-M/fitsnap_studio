@@ -7,6 +7,7 @@ import { authenticate } from "../shopify.server";
 import phpApiClient from "../lib/php-api.server";
 import { ensureMerchant } from "../lib/merchant.server";
 import { PHP_API_URL } from "../lib/env.server";
+import { phpPlanToUi } from "../lib/plans";
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 
@@ -21,10 +22,7 @@ export async function loader({ request }) {
   return {
     settings: res.ok ? (res.data ?? null) : null,
     shop: session.shop,
-    currentPlan: planRes.ok
-      ? ((planRes.data?.plan === "basic" ? "free" : planRes.data?.plan) ??
-        "free")
-      : "free",
+    currentPlan: phpPlanToUi(planRes.ok ? (planRes.data?.plan ?? "basic") : "basic"),
   };
 }
 

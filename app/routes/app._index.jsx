@@ -29,6 +29,7 @@ import { authenticate } from "../shopify.server";
 import phpApiClient from "../lib/php-api.server";
 import { ensureMerchant } from "../lib/merchant.server";
 import { PHP_API_URL, SHOPIFY_API_KEY } from "../lib/env.server";
+import { phpPlanToUi } from "../lib/plans";
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
@@ -340,7 +341,7 @@ export default function Index() {
     plans,
     shop,
   } = useLoaderData();
-  const effectivePlan = (plan?.plan === "basic" ? "free" : plan?.plan) ?? "free";
+  const effectivePlan = phpPlanToUi(plan?.plan ?? "basic");
   const planLimit = plan?.limit || PLAN_LIMITS[effectivePlan] || 10;
   const currentPlanRow = plans.find((p) => p.plan === effectivePlan) ?? null;
   const planPrice = currentPlanRow

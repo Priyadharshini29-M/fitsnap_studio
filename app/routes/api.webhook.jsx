@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { SHOPIFY_API_SECRET, PHP_API_URL, PHP_API_SECRET } from "../lib/env.server";
+import { getMerchantApiKey } from "../lib/merchant.server";
 
 /**
  * Webhook handler for:
@@ -68,6 +69,19 @@ export const action = async ({ request }) => {
     }).catch(() => {
       console.warn("Could not deactivate merchant for shop:", shop);
     });
+  }
+
+  // Fires on any subscription state change; downgrade to free when cancelled.
+  if (topic === "app_subscriptions/update" && payload.status === "CANCELLED") {
+    try {
+      const merchantApiKey = await getMerchantApiKey(shop);
+      if (merchantApiKey) {
+        await phpFetch(phpBase, merchantApiKey, "/plan/update", { plan: "basic" });
+        console.log("[webhook] subscription cancelled — downgraded to basic for:", shop);
+      }
+    } catch (err) {
+      console.error("[webhook] app_subscriptions/update error for shop:", shop, err?.message ?? err);
+    }
   }
 
   // ── GDPR mandatory webhooks ────────────────────────────────────────────────

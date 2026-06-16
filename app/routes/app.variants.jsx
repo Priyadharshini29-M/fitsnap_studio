@@ -1,6 +1,4 @@
 import { useLoaderData, useSubmit, useNavigation, useActionData, useNavigate } from "react-router";
-import PlanGate from "../components/PlanGate";
-import { planAtLeast } from "../lib/plans";
 import { useState, useEffect } from "react";
 import {
   Page,
@@ -60,10 +58,6 @@ export async function loader({ request }) {
 
   const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
-  const planRes = await api.checkPlanLimit();
-  const rawPlan = planRes.ok ? (planRes.data?.plan ?? "free") : "free";
-  const currentPlan = rawPlan === "basic" ? "free" : rawPlan;
-
   const syncRes  = await api.syncProduct({
     shopify_product_id:  productId,
     shopify_product_gid: productGid,
@@ -90,7 +84,7 @@ export async function loader({ request }) {
   const existingMapping = mappings[0] ?? null;
   const resolvedProductId = existingMapping?.product_id ?? internalId;
 
-  return { product, variants, mappings, productImages, internalId: resolvedProductId, productId, currentPlan, syncError };
+  return { product, variants, mappings, productImages, internalId: resolvedProductId, productId, syncError };
 }
 
 export async function action({ request }) {
@@ -98,29 +92,6 @@ export async function action({ request }) {
   const apiKey = await ensureMerchant(session);
   const body = await request.json();
   const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
-
-  // Diagnostic: PHP test via the same SSL-safe client used for real saves
-  if (body._action === "test_php") {
-    const testPayload = {
-      product_id:          body.product_id ?? null,
-      shopify_product_id:  body.shopify_product_id ?? null,
-      shopify_variant_id:  body.shopify_variant_id,
-      shopify_variant_gid: body.shopify_variant_gid,
-      variant_title:       body.variant_title ?? null,
-      tryon_image_url:     "https://cdn.shopify.com/test.jpg",
-      image_type:          "flat_lay",
-      garment_type:        "top",
-      avatar_sex:          null,
-      clothing_prompt:     null,
-    };
-    const testRes = await api.saveVariantMapping(testPayload);
-    return {
-      _test:       true,
-      status:      testRes.ok ? 200 : (testRes.status ?? 500),
-      phpBody:     testRes.ok ? JSON.stringify(testRes.data) : (testRes.error ?? "unknown error"),
-      sentPayload: testPayload,
-    };
-  }
 
   const phpPayload = {
     product_id:          body.product_id         ?? null,
@@ -373,12 +344,8 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
 }
 
 export default function Variants() {
-  const { product, variants, mappings, productImages, internalId, productId, currentPlan, syncError } = useLoaderData();
-  const actionData = useActionData();
-  const submit = useSubmit();
+  const { product, variants, mappings, productImages, internalId, productId, syncError } = useLoaderData();
   const navigate = useNavigate();
-
-  const testResult = actionData?._test ? actionData : null;
 
   if (!product) {
     return (
@@ -387,15 +354,6 @@ export default function Variants() {
       </Page>
     );
   }
-
-  // Plan gate temporarily disabled
-  // if (!planAtLeast(currentPlan, "growth")) {
-  //   return (
-  //     <Page title="Variant Mappings" backAction={{ url: "/app/products", content: "Products" }}>
-  //       <PlanGate currentPlan={currentPlan} requiredPlan="growth" featureName="Variant Image Mapping">{null}</PlanGate>
-  //     </Page>
-  //   );
-  // }
 
   const mappingsByVariant = {};
   for (const m of mappings) {
@@ -415,41 +373,6 @@ export default function Variants() {
                 <p>{syncError}</p>
               </Banner>
             )}
-
-            {/* PHP endpoint test — remove once variant save is confirmed working */}
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h3" variant="headingSm">PHP Endpoint Test</Text>
-                <InlineStack gap="200">
-                  <Button
-                    size="slim"
-                    onClick={() => {
-                      // Test POST with an unmapped variant (if any), else first variant
-                      const unmapped = variants.find(v => {
-                        const nId = v.id.replace("gid://shopify/ProductVariant/", "");
-                        return !mappingsByVariant[nId];
-                      }) ?? variants[0];
-                      const numId = unmapped?.id?.replace("gid://shopify/ProductVariant/", "") ?? "";
-                      submit(
-                        { _action: "test_php", product_id: internalId, shopify_product_id: productId,
-                          shopify_variant_id: numId, shopify_variant_gid: unmapped?.id ?? "",
-                          variant_title: unmapped?.title ?? "" },
-                        { method: "post", encType: "application/json" }
-                      );
-                    }}
-                  >
-                    Test POST (new mapping)
-                  </Button>
-                </InlineStack>
-                {testResult && (
-                  <Banner tone={testResult.status >= 200 && testResult.status < 300 ? "success" : "critical"}>
-                    <p><strong>HTTP {testResult.status}</strong></p>
-                    <p><strong>PHP response:</strong> {testResult.phpBody || "(empty body)"}</p>
-                    <p><strong>Sent:</strong> {JSON.stringify(testResult.sentPayload).slice(0, 300)}</p>
-                  </Banner>
-                )}
-              </BlockStack>
-            </Card>
 
             {variants.map((variant, idx) => {
               const numericId = variant.id.replace("gid://shopify/ProductVariant/", "");

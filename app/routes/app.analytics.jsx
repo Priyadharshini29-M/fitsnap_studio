@@ -28,6 +28,7 @@ import { authenticate } from "../shopify.server";
 import phpApiClient from "../lib/php-api.server";
 import { ensureMerchant } from "../lib/merchant.server";
 import { PHP_API_URL } from "../lib/env.server";
+import { phpPlanToUi } from "../lib/plans";
 
 function getFromDate(range) {
   const d = new Date();
@@ -124,7 +125,7 @@ export async function loader({ request }) {
     to,
     shop:        session.shop,
     currencyCode,
-    currentPlan: (planData?.plan === "basic" ? "free" : planData?.plan) ?? "free",
+    currentPlan: phpPlanToUi(planData?.plan ?? "basic"),
   };
 }
 

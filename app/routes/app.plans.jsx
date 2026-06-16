@@ -17,6 +17,7 @@ import { authenticate } from "../shopify.server";
 import phpApiClient from "../lib/php-api.server";
 import { ensureMerchant } from "../lib/merchant.server";
 import { PHP_API_URL, NODE_ENV } from "../lib/env.server";
+import { phpPlanToUi, uiPlanToPhp } from "../lib/plans";
 
 // ─── Billing constants ────────────────────────────────────────────────────────
 
@@ -73,12 +74,12 @@ export async function loader({ request }) {
   }
 
   const planData = planRes.ok ? planRes.data : null;
-  const rawPlan  = planData?.plan ?? "free";
+  const rawPlan  = planData?.plan ?? "basic";
 
   console.log("[loader] current plan:", rawPlan, "upgraded:", planUpgraded);
 
   return {
-    currentPlan:    rawPlan === "basic" ? "free" : rawPlan,
+    currentPlan:    phpPlanToUi(rawPlan),
     usedTryons:     planData?.used  ?? 0,
     limitTryons:    planData?.limit ?? 10,
     billingDeclined,
@@ -145,7 +146,7 @@ export async function action({ request }) {
 
     try {
       const freeApiKey = await ensureMerchant(session);
-      await phpApiClient(freeApiKey, PHP_API_URL, session.shop).updatePlan("free");
+      await phpApiClient(freeApiKey, PHP_API_URL, session.shop).updatePlan(uiPlanToPhp("free"));
       console.log("[action] PHP plan updated to free");
     } catch (phpErr) {
       console.error("[action] PHP update error:", phpErr?.message ?? phpErr);
