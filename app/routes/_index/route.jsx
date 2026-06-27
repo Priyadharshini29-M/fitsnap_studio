@@ -5,7 +5,13 @@ import styles from "./styles.module.css";
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
 
-  if (url.searchParams.get("shop")) {
+  // Any Shopify-context params mean we're in the embedded app — go to dashboard
+  if (
+    url.searchParams.get("shop") ||
+    url.searchParams.get("hmac") ||
+    url.searchParams.get("session") ||
+    url.searchParams.get("id_token")
+  ) {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 

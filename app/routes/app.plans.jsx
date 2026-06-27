@@ -23,7 +23,7 @@ import { phpPlanToUi, uiPlanToPhp } from "../lib/plans";
 
 const PLAN_KEY_MAP = {
   growth: "FitSnap Growth",
-  pro:    "FitSnap Pro",
+  pro: "FitSnap Pro",
 };
 
 // Numeric rank for upgrade vs downgrade label
@@ -52,36 +52,44 @@ export async function loader({ request }) {
   } catch (authErr) {
     // Re-throw Shopify auth Responses (redirects, 401s) — do NOT swallow them
     if (authErr instanceof Response) throw authErr;
-    console.error("[loader] authentication error:", authErr?.message ?? authErr);
+    console.error(
+      "[loader] authentication error:",
+      authErr?.message ?? authErr,
+    );
     // Re-throw so the ErrorBoundary can display the message
-    throw new Error(`Authentication failed: ${authErr?.message ?? "Unknown error"}`);
+    throw new Error(
+      `Authentication failed: ${authErr?.message ?? "Unknown error"}`,
+    );
   }
 
   const apiKey = await ensureMerchant(session);
-  const api    = phpApiClient(apiKey, PHP_API_URL, session.shop);
+  const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
 
-  const url             = new URL(request.url);
+  const url = new URL(request.url);
   const billingDeclined = url.searchParams.get("billing_declined") === "1";
-  const planUpgraded    = url.searchParams.get("plan_upgraded")    === "1";
+  const planUpgraded = url.searchParams.get("plan_upgraded") === "1";
 
   // ── Normal load ───────────────────────────────────────────────────────────
   let planRes;
   try {
     planRes = await api.checkPlanLimit();
   } catch (planErr) {
-    console.error("[loader] checkPlanLimit error:", planErr?.message ?? planErr);
+    console.error(
+      "[loader] checkPlanLimit error:",
+      planErr?.message ?? planErr,
+    );
     planRes = { ok: false };
   }
 
   const planData = planRes.ok ? planRes.data : null;
-  const rawPlan  = planData?.plan ?? "basic";
+  const rawPlan = planData?.plan ?? "basic";
 
   console.log("[loader] current plan:", rawPlan, "upgraded:", planUpgraded);
 
   return {
-    currentPlan:    phpPlanToUi(rawPlan),
-    usedTryons:     planData?.used  ?? 0,
-    limitTryons:    planData?.limit ?? 10,
+    currentPlan: phpPlanToUi(rawPlan),
+    usedTryons: planData?.used ?? 0,
+    limitTryons: planData?.limit ?? 10,
     billingDeclined,
     planUpgraded,
   };
@@ -103,10 +111,17 @@ export async function action({ request }) {
       // Shopify auth flow. Re-throwing 4xx/5xx error Responses causes Shopify's
       // admin to show "Application Error" instead of our route's ErrorBoundary.
       if (authErr.status >= 300 && authErr.status < 400) throw authErr;
-      console.error("[action] auth error response:", authErr.status, authErr.statusText);
+      console.error(
+        "[action] auth error response:",
+        authErr.status,
+        authErr.statusText,
+      );
       return { error: "Session error. Please refresh the page and try again." };
     }
-    console.error("[action] authentication error:", authErr?.message ?? authErr);
+    console.error(
+      "[action] authentication error:",
+      authErr?.message ?? authErr,
+    );
     return { error: `Authentication error: ${authErr?.message ?? "Unknown"}` };
   }
 
@@ -114,7 +129,7 @@ export async function action({ request }) {
   let planName;
   try {
     const formData = await request.formData();
-    planName       = formData.get("plan");
+    planName = formData.get("plan");
     console.log("[action] selected plan:", planName);
   } catch (bodyErr) {
     console.error("[action] formData error:", bodyErr?.message ?? bodyErr);
@@ -139,14 +154,24 @@ export async function action({ request }) {
         });
       }
     } catch (cancelErr) {
-      if (cancelErr instanceof Response && cancelErr.status >= 300 && cancelErr.status < 400) throw cancelErr;
-      console.error("[action] subscription cancel error:", cancelErr?.message ?? cancelErr);
+      if (
+        cancelErr instanceof Response &&
+        cancelErr.status >= 300 &&
+        cancelErr.status < 400
+      )
+        throw cancelErr;
+      console.error(
+        "[action] subscription cancel error:",
+        cancelErr?.message ?? cancelErr,
+      );
       // Non-fatal — continue to update PHP backend
     }
 
     try {
       const freeApiKey = await ensureMerchant(session);
-      await phpApiClient(freeApiKey, PHP_API_URL, session.shop).updatePlan(uiPlanToPhp("free"));
+      await phpApiClient(freeApiKey, PHP_API_URL, session.shop).updatePlan(
+        uiPlanToPhp("free"),
+      );
       console.log("[action] PHP plan updated to free");
     } catch (phpErr) {
       console.error("[action] PHP update error:", phpErr?.message ?? phpErr);
@@ -167,8 +192,12 @@ export async function action({ request }) {
   }
 
   const { origin } = new URL(request.url);
-  const returnUrl  = `${origin}/billing/callback?plan=${planName}&shop=${session.shop}`;
-  console.log("[action] creating subscription for plan:", planKey, "returnUrl:", returnUrl);
+  const returnUrl = `${origin}/billing/callback?plan=${planName}&shop=${session.shop}`;
+  console.log(
+    "[action] creating subscription for plan:",
+    planKey,
+    "returnUrl:",
+  );
 
   try {
     const gqlRes = await admin.graphql(
@@ -194,29 +223,37 @@ export async function action({ request }) {
       }`,
       {
         variables: {
-          name:      planKey,
+          name: planKey,
           returnUrl,
-          test:      NODE_ENV !== "production",
+          test: NODE_ENV !== "production",
           trialDays: 3,
-          lineItems: [{
-            plan: {
-              appRecurringPricingDetails: {
-                price: { amount: planName === "growth" ? "19.00" : "49.00", currencyCode: "USD" },
-                interval: "EVERY_30_DAYS",
+          lineItems: [
+            {
+              plan: {
+                appRecurringPricingDetails: {
+                  price: {
+                    amount: planName === "growth" ? "19.00" : "49.00",
+                    currencyCode: "USD",
+                  },
+                  interval: "EVERY_30_DAYS",
+                },
               },
             },
-          }],
+          ],
         },
-      }
+      },
     );
 
-    const gqlData        = await gqlRes.json();
-    const confirmationUrl = gqlData?.data?.appSubscriptionCreate?.confirmationUrl;
-    const userErrors      = gqlData?.data?.appSubscriptionCreate?.userErrors ?? [];
+    const gqlData = await gqlRes.json();
+    const confirmationUrl =
+      gqlData?.data?.appSubscriptionCreate?.confirmationUrl;
+    const userErrors = gqlData?.data?.appSubscriptionCreate?.userErrors ?? [];
 
     if (userErrors.length > 0) {
       console.error("[action] GraphQL userErrors:", JSON.stringify(userErrors));
-      return { error: userErrors[0]?.message ?? "Could not create subscription." };
+      return {
+        error: userErrors[0]?.message ?? "Could not create subscription.",
+      };
     }
 
     if (!confirmationUrl) {
@@ -230,7 +267,9 @@ export async function action({ request }) {
     return { billingUrl: confirmationUrl };
   } catch (billingErr) {
     console.error("[action] billing error:", billingErr?.message ?? billingErr);
-    return { error: "Billing service error. Please try again or contact support." };
+    return {
+      error: "Billing service error. Please try again or contact support.",
+    };
   }
 }
 
@@ -238,12 +277,12 @@ export async function action({ request }) {
 
 const PLAN_CONFIG = [
   {
-    key:         "free",
-    name:        "Preview",
-    badge:       null,
-    price:       "Free",
-    priceSub:    "forever",
-    extraRate:   null,
+    key: "free",
+    name: "Preview",
+    badge: null,
+    price: "Free",
+    priceSub: "forever",
+    extraRate: null,
     description: "Get started with AI virtual try-on at zero cost.",
     features: [
       "10 monthly AI try-ons included",
@@ -253,17 +292,17 @@ const PLAN_CONFIG = [
       "Standard AI processing",
       "Email support",
     ],
-    buttonLabel:   "Current Plan",
+    buttonLabel: "Current Plan",
     buttonVariant: "outline",
-    featured:      false,
+    featured: false,
   },
   {
-    key:         "growth",
-    name:        "Growth",
-    badge:       { label: "MOST POPULAR", variant: "popular" },
-    price:       "$19",
-    priceSub:    "/ month",
-    extraRate:   "+$0.15 / extra try-on",
+    key: "growth",
+    name: "Growth",
+    badge: { label: "MOST POPULAR", variant: "popular" },
+    price: "$19",
+    priceSub: "/ month",
+    extraRate: "+$0.15 / extra try-on",
     description: "Scale your virtual try-on with powerful store tools.",
     features: [
       "100 monthly AI try-ons included",
@@ -280,17 +319,17 @@ const PLAN_CONFIG = [
       "Faster AI processing queue",
       "Standard support",
     ],
-    buttonLabel:   "Upgrade to Growth",
+    buttonLabel: "Upgrade to Growth",
     buttonVariant: "green",
-    featured:      true,
+    featured: true,
   },
   {
-    key:         "pro",
-    name:        "Pro",
-    badge:       { label: "PREMIUM", variant: "premium" },
-    price:       "$49",
-    priceSub:    "/ month",
-    extraRate:   "+$0.08 / extra try-on",
+    key: "pro",
+    name: "Pro",
+    badge: { label: "PREMIUM", variant: "premium" },
+    price: "$49",
+    priceSub: "/ month",
+    extraRate: "+$0.08 / extra try-on",
     description: "Full power for high-volume stores and brands.",
     features: [
       "500 monthly AI try-ons included",
@@ -307,9 +346,9 @@ const PLAN_CONFIG = [
       "Early access to new features",
       "Dedicated onboarding assistance",
     ],
-    buttonLabel:   "Upgrade to Pro",
+    buttonLabel: "Upgrade to Pro",
     buttonVariant: "dark",
-    featured:      false,
+    featured: false,
   },
 ];
 
@@ -388,22 +427,26 @@ function Chevron({ open }) {
 
 function PlanCard({ config, isCurrent, currentPlanKey, isSubmitting }) {
   const currentRank = PLAN_RANK[currentPlanKey] ?? 0;
-  const thisRank    = PLAN_RANK[config.key]     ?? 0;
+  const thisRank = PLAN_RANK[config.key] ?? 0;
   const isDowngrade = thisRank < currentRank;
-  const isUpgrade   = thisRank > currentRank;
+  const isUpgrade = thisRank > currentRank;
 
   let ctaLabel = config.buttonLabel;
   if (!isCurrent) {
-    if (isDowngrade)      ctaLabel = `Downgrade to ${config.name}`;
-    else if (isUpgrade)   ctaLabel = `Upgrade to ${config.name}`;
+    if (isDowngrade) ctaLabel = `Downgrade to ${config.name}`;
+    else if (isUpgrade) ctaLabel = `Upgrade to ${config.name}`;
   }
 
   return (
-    <div className={`vto-plan-card${config.featured ? " vto-plan-card--featured" : ""}`}>
+    <div
+      className={`vto-plan-card${config.featured ? " vto-plan-card--featured" : ""}`}
+    >
       {/* Badge row */}
       <div className="vto-plan-badge-row">
         {config.badge ? (
-          <span className={`vto-plan-badge vto-plan-badge--${config.badge.variant}`}>
+          <span
+            className={`vto-plan-badge vto-plan-badge--${config.badge.variant}`}
+          >
             {config.badge.label}
           </span>
         ) : (
@@ -417,13 +460,22 @@ function PlanCard({ config, isCurrent, currentPlanKey, isSubmitting }) {
         <div style={{ display: "flex", alignItems: "baseline", gap: "4px" }}>
           <p className="vto-plan-price">{config.price}</p>
           {config.priceSub && (
-            <span style={{ fontSize: "13px", color: "#6B7280", fontWeight: 400 }}>
+            <span
+              style={{ fontSize: "13px", color: "#6B7280", fontWeight: 400 }}
+            >
               {config.priceSub}
             </span>
           )}
         </div>
         {config.extraRate && (
-          <p style={{ fontSize: "11px", color: "#9CA3AF", marginTop: "4px", fontWeight: 500 }}>
+          <p
+            style={{
+              fontSize: "11px",
+              color: "#9CA3AF",
+              marginTop: "4px",
+              fontWeight: 500,
+            }}
+          >
             {config.extraRate}
           </p>
         )}
@@ -500,10 +552,16 @@ function FaqAccordion() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Plans() {
-  const { currentPlan, usedTryons, limitTryons, billingDeclined, planUpgraded } = useLoaderData();
-  const actionData   = useActionData();
-  const navigation   = useNavigation();
-  const navigate     = useNavigate();
+  const {
+    currentPlan,
+    usedTryons,
+    limitTryons,
+    billingDeclined,
+    planUpgraded,
+  } = useLoaderData();
+  const actionData = useActionData();
+  const navigation = useNavigation();
+  const navigate = useNavigate();
   const isSubmitting = navigation.state === "submitting";
 
   // Navigate top window to Shopify billing confirmation page.
@@ -520,9 +578,13 @@ export default function Plans() {
   // While redirecting to billing, show an interim screen with a manual fallback link
   if (actionData?.billingUrl) {
     return (
-      <Page backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
+      <Page
+        backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}
+      >
         <div style={{ textAlign: "center", padding: "80px 20px" }}>
-          <p style={{ fontSize: "15px", color: "#6B7280", marginBottom: "20px" }}>
+          <p
+            style={{ fontSize: "15px", color: "#6B7280", marginBottom: "20px" }}
+          >
             Redirecting to Shopify billing…
           </p>
           <a
@@ -548,59 +610,70 @@ export default function Plans() {
   }
 
   return (
-    <Page backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}>
+    <Page
+      backAction={{ onAction: () => navigate("/app"), content: "Dashboard" }}
+    >
       <div className="vto-plan-page">
-
         {/* Plan upgrade success banner */}
         {planUpgraded && (
-          <div style={{
-            background: "#D1FAE5",
-            border: "1px solid #6EE7B7",
-            borderRadius: "8px",
-            padding: "14px 18px",
-            marginBottom: "24px",
-            fontSize: "14px",
-            color: "#065F46",
-            fontWeight: 500,
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-          }}>
+          <div
+            style={{
+              background: "#D1FAE5",
+              border: "1px solid #6EE7B7",
+              borderRadius: "8px",
+              padding: "14px 18px",
+              marginBottom: "24px",
+              fontSize: "14px",
+              color: "#065F46",
+              fontWeight: 500,
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+            }}
+          >
             <span style={{ fontSize: "20px" }}>✅</span>
             <span>
-              Your plan has been upgraded to <strong>{currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)}</strong> successfully!
-              Your new features are active now.
+              Your plan has been upgraded to{" "}
+              <strong>
+                {currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)}
+              </strong>{" "}
+              successfully! Your new features are active now.
             </span>
           </div>
         )}
 
         {/* Action error banner */}
         {actionData?.error && (
-          <div style={{
-            background: "#FEE2E2",
-            border: "1px solid #EF4444",
-            borderRadius: "8px",
-            padding: "12px 16px",
-            marginBottom: "24px",
-            fontSize: "14px",
-            color: "#991B1B",
-          }}>
+          <div
+            style={{
+              background: "#FEE2E2",
+              border: "1px solid #EF4444",
+              borderRadius: "8px",
+              padding: "12px 16px",
+              marginBottom: "24px",
+              fontSize: "14px",
+              color: "#991B1B",
+            }}
+          >
             ⚠ {actionData.error}
           </div>
         )}
 
         {/* Billing declined notice */}
         {billingDeclined && (
-          <div style={{
-            background: "#FFF3CD",
-            border: "1px solid #F59E0B",
-            borderRadius: "8px",
-            padding: "12px 16px",
-            marginBottom: "24px",
-            fontSize: "14px",
-            color: "#92400E",
-          }}>
-            The subscription request was declined. You can upgrade again whenever you&apos;re ready.
+          <div
+            style={{
+              background: "#FFF3CD",
+              border: "1px solid #F59E0B",
+              borderRadius: "8px",
+              padding: "12px 16px",
+              marginBottom: "24px",
+              fontSize: "14px",
+              color: "#92400E",
+            }}
+          >
+            The subscription request was declined. You can upgrade again
+            whenever you&apos;re ready.
           </div>
         )}
 
@@ -609,7 +682,8 @@ export default function Plans() {
           <span className="vto-pricing-pill">PRICING</span>
           <h1 className="vto-plan-page-title">Choose Your Plan</h1>
           <p className="vto-plan-page-subtitle">
-            Simple, transparent pricing that grows with your store. No hidden fees.
+            Simple, transparent pricing that grows with your store. No hidden
+            fees.
           </p>
         </div>
 
@@ -646,12 +720,13 @@ export function ErrorBoundary() {
     (typeof error === "string" ? error : null) ??
     "An unexpected error occurred.";
 
-  const stack =
-    typeof error?.stack === "string" ? error.stack : null;
+  const stack = typeof error?.stack === "string" ? error.stack : null;
 
   return (
     <div style={{ padding: "40px 24px", fontFamily: "system-ui, sans-serif" }}>
-      <h2 style={{ color: "#dc2626", marginBottom: "16px" }}>Plans Page Error</h2>
+      <h2 style={{ color: "#dc2626", marginBottom: "16px" }}>
+        Plans Page Error
+      </h2>
       <pre
         style={{
           background: "#fee2e2",
@@ -669,7 +744,9 @@ export function ErrorBoundary() {
       </pre>
       {stack && (
         <details>
-          <summary style={{ cursor: "pointer", fontSize: "13px", color: "#6b7280" }}>
+          <summary
+            style={{ cursor: "pointer", fontSize: "13px", color: "#6b7280" }}
+          >
             Stack trace
           </summary>
           <pre

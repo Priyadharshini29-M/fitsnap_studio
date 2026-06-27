@@ -221,7 +221,7 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
   const imageOptions = [
     { label: "Enter URL below", value: "" },
     ...productImages.map((img) => ({
-      label: img.altText ?? img.url.split("/").pop() ?? "Image",
+      label: img.altText || img.url.split("/").pop() || "Image",
       value: img.url,
     })),
     ...(variant.image?.url
@@ -300,7 +300,7 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
         helpText="Controls how the try-on result is composited. Top wear preserves the original lower body."
       />
 
-      <InlineStack gap="300" wrap>
+<InlineStack gap="300" wrap>
         <div style={{ flex: 1 }}>
           <Select
             label="Image type"
@@ -322,7 +322,15 @@ function VariantRow({ variant, mapping, productImages, internalProductId, produc
       <TextField
         label="Clothing prompt (optional, max 200 chars)"
         value={prompt}
-        onChange={(v) => setPrompt(v.slice(0, 200))}
+        onChange={(v) => {
+          const trimmed = v.slice(0, 200);
+          setPrompt(trimmed);
+          // Auto-correct garment type when prompt mentions full-body garments
+          const lower = trimmed.toLowerCase();
+          if (/\b(saree|sari|lehenga|gown|dress|jumpsuit|anarkali|abaya|salwar\s*kameez)\b/.test(lower)) {
+            setGarmentType("full");
+          }
+        }}
         multiline={2}
         maxLength={200}
         showCharacterCount

@@ -10,6 +10,8 @@
  *                                          if the api_key lookup fails
  */
 import https from "node:https";
+import http from "node:http";
+
 const phpHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
@@ -44,6 +46,9 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
     if (bodyStr) headers['Content-Length'] = Buffer.byteLength(bodyStr).toString();
 
     const parsed = new URL(urlStr);
+    const isHttps = parsed.protocol === "https:";
+    const client = isHttps ? https : http;
+    const defaultPort = isHttps ? 443 : 80;
 
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -51,8 +56,15 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
         resolve({ ok: false, error: 'Request timed out', status: 0 });
       }, timeoutMs);
 
-      const req = https.request(
-        { hostname: parsed.hostname, port: parsed.port || 443, path: parsed.pathname + parsed.search, method, headers, agent: phpHttpsAgent },
+      const req = client.request(
+        { 
+          hostname: parsed.hostname, 
+          port: parsed.port || defaultPort, 
+          path: parsed.pathname + parsed.search, 
+          method, 
+          headers, 
+          agent: isHttps ? phpHttpsAgent : undefined 
+        },
         (res) => {
           let raw = '';
           res.setEncoding('utf8');
@@ -135,5 +147,44 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
 
     patchWidgetSettings: (data) =>
       request('PATCH', '/widget/settings', data),
+
+    // ── Garment Studio ───────────────────────────────────────────────────────
+
+    studioGenerate: (data) =>
+      request('POST', '/studio/generate', data, 120_000),
+
+    studioSetupCheck: () =>
+      request('GET', '/studio/setup-check'),
+
+    studioGetModels: () =>
+      request('GET', '/studio/models'),
+
+    studioGetSession: (sessionId) =>
+      request('GET', `/studio/session?session_id=${encodeURIComponent(sessionId)}`),
+
+    studioListSessions: (params = {}) => {
+      const qs = new URLSearchParams(params).toString();
+      return request('GET', `/studio/sessions${qs ? '?' + qs : ''}`);
+    },
+
+    studioSaveGallery: (sessionId) =>
+      request('POST', '/studio/save-gallery', { session_id: sessionId }),
+
+    studioSetModelImage: (modelKey, imageUrl) =>
+      request('POST', '/studio/set-model-image', { model_key: modelKey, image_url: imageUrl }),
+
+    studioDeleteModelImage: (modelKey) =>
+      request('DELETE', '/studio/model-image', { model_key: modelKey }),
+
+    // ── Infographic (OpenAI GPT extraction + PHP GD composition) ─────────────
+
+    infographicCreate: (data) =>
+      request('POST', '/infographic/create', data, 90_000),
+
+    infographicExtractPoints: (data) =>
+      request('POST', '/infographic/extract-points', data, 30_000),
+
+    infographicGenerate: (data) =>
+      request('POST', '/infographic/generate', data, 90_000),
   };
 }

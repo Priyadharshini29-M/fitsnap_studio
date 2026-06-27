@@ -30,5 +30,6 @@ export async function loader({ request }) {
     }
   }
 
-  return redirect("/app");
+  // Include shop so App Bridge has context when re-embedding after OAuth
+  return redirect(`/app?shop=${session.shop}`);
 }

@@ -15,8 +15,12 @@ export const loader = async ({ request }) => {
     // Network/token-exchange error — redirect to login so merchant can re-auth
     console.error("[app.jsx loader] auth error:", err?.message ?? err);
     const url = new URL(request.url);
-    const shop = url.searchParams.get("shop") ?? "";
-    throw redirect(`/auth/login${shop ? `?shop=${shop}` : ""}`);
+    const params = new URLSearchParams();
+    const shop = url.searchParams.get("shop");
+    const host = url.searchParams.get("host");
+    if (shop) params.set("shop", shop);
+    if (host) params.set("host", host);
+    throw redirect(`/auth/login${params.size ? `?${params.toString()}` : ""}`);
   }
   return { apiKey: SHOPIFY_API_KEY };
 };
@@ -29,6 +33,7 @@ export default function App() {
       <PolarisAppProvider i18n={enTranslations}>
         <s-app-nav>
           <s-link href="/app/products">Products</s-link>
+          <s-link href="/app/studio">Studio</s-link>
           <s-link href="/app/settings">Widget Settings</s-link>
           <s-link href="/app/analytics">Analytics</s-link>
           <s-link href="/app/plans">Plans</s-link>

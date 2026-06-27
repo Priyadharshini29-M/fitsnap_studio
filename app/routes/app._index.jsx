@@ -362,6 +362,10 @@ export default function Index() {
   const sliderRef = useRef(null);
 
   useEffect(() => {
+    setAppEnabled(initialAppEnabled ?? true);
+  }, [initialAppEnabled]);
+
+  useEffect(() => {
     if (actionData?.ok) setToastActive(true);
   }, [actionData]);
 
