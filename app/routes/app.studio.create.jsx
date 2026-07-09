@@ -223,6 +223,7 @@ function resolveModel(models, key) {
     gender:       s?.gender       ?? (key.startsWith("male") ? "male" : "female"),
     image_exists: s?.image_exists ?? false,
     image_url:    s?.image_url    ?? null,
+    image_hash:   s?.image_hash   ?? null,
   };
 }
 
@@ -253,10 +254,10 @@ function CrSelect({ label, required, value, onChange, options, hint }) {
   );
 }
 
-function CrTextarea({ label, value, onChange, placeholder, rows=3, hint }) {
+function CrTextarea({ label, required, value, onChange, placeholder, rows=3, hint }) {
   return (
     <div style={{marginBottom:"14px"}}>
-      {label && <FieldLabel hint={hint}>{label}</FieldLabel>}
+      {label && <FieldLabel required={required} hint={hint}>{label}</FieldLabel>}
       <textarea className="cr-input" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={rows}
         style={{resize:"vertical",lineHeight:1.5}} />
     </div>
@@ -597,11 +598,24 @@ function ProductTypeStep({ productType, wearType, onTypeChange, onWearChange }) 
 // ── Model Selector ────────────────────────────────────────────────────────────
 
 function ModelSelector({ models, selectedKey, onSelect }) {
-  const [tab,       setTab]       = useState("saved");
-  const [gender,    setGender]    = useState("female");
-  const [newUrl,    setNewUrl]    = useState(null);
+  const [tab,    setTab]    = useState("saved");
+  const [newUrl, setNewUrl] = useState(null);
 
-  const modelKeys = gender === "female" ? FEMALE_KEYS : MALE_KEYS;
+  // Merge both gender brackets into one flat list, keep only slots that
+  // actually have a photo, and drop duplicate photos. Slots always have
+  // distinct URLs (one file per slot), so the same photo saved into more
+  // than one bracket is detected by content hash instead.
+  const seenHashes = new Set();
+  const savedModels = [...FEMALE_KEYS, ...MALE_KEYS]
+    .map((key) => resolveModel(models, key))
+    .filter((m) => {
+      if (!m.image_exists || !m.image_url) return false;
+      const dedupeKey = m.image_hash ?? m.image_url;
+      if (seenHashes.has(dedupeKey)) return false;
+      seenHashes.add(dedupeKey);
+      return true;
+    })
+    .map((m, i) => ({ ...m, label: `Model ${i + 1}` }));
 
   return (
     <div>
@@ -615,45 +629,37 @@ function ModelSelector({ models, selectedKey, onSelect }) {
           <p style={{fontSize:"12px",color:"#6B7280",margin:"0 0 12px",lineHeight:1.6,background:"#F9FAFB",padding:"8px 10px",borderRadius:"6px",borderLeft:"3px solid #D1D5DB"}}>
             Upload a full-body, front-facing model photo on a clean background. Min 768×1024 px. Max 5 MB.
           </p>
-          <UploadZone label="Model Photo" required value={newUrl} onChange={(url) => { setNewUrl(url); onSelect("__custom__", url, gender); }} />
+          <UploadZone label="Model Photo" required value={newUrl} onChange={(url) => { setNewUrl(url); onSelect("__custom__", url, "female"); }} />
           {newUrl && <div className="cr-ok-banner">✓ Model photo ready. Continue to the next step.</div>}
         </div>
       ) : (
         <div>
-          <div className="cr-seg" style={{marginBottom:"14px"}}>
-            <button className={`cr-seg-btn ${gender==="female"?"active":""}`} onClick={() => setGender("female")}>Female</button>
-            <button className={`cr-seg-btn ${gender==="male"  ?"active":""}`} onClick={() => setGender("male")}>Male</button>
-          </div>
           <div className="cr-model-grid">
-            {modelKeys.map((key) => {
-              const m = resolveModel(models, key);
-              const sel = selectedKey === key;
+            {savedModels.map((m) => {
+              const sel = selectedKey === m.key;
               return (
-                <div key={key}
-                  className={`cr-model-card ${sel?"selected":""} ${!m.image_exists?"empty":""}`}
-                  title={!m.image_exists?"No photo uploaded yet — go to Studio Models to add one":m.label}
+                <div key={m.key}
+                  className={`cr-model-card ${sel?"selected":""}`}
+                  title={m.label}
                   role="button"
                   tabIndex={0}
-                  onClick={() => m.image_exists && onSelect(key, m.image_url, m.gender)}
-                  onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && m.image_exists) { e.preventDefault(); onSelect(key, m.image_url, m.gender); } }}
+                  onClick={() => onSelect(m.key, m.image_url, m.gender)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(m.key, m.image_url, m.gender); } }}
                 >
                   <div className="cr-model-thumb">
-                    {m.image_exists && m.image_url
-                      ? <img src={m.image_url} alt={m.label} style={{width:"100%",height:"100%",objectFit:"cover"}} />
-                      : <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"4px",color:"#D1D5DB"}}>
-                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.5"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                          <span style={{fontSize:"9px",color:"#C4C4C4"}}>No photo</span>
-                        </div>
-                    }
+                    <img src={m.image_url} alt={m.label} style={{width:"100%",height:"100%",objectFit:"cover"}} />
                     {sel && <div className="cr-model-tick">✓</div>}
                   </div>
                   <div className="cr-model-name">{m.label}</div>
                 </div>
               );
             })}
+            {savedModels.length === 0 && (
+              <p style={{fontSize:"12px",color:"#9CA3AF",gridColumn:"1 / -1"}}>No saved model photos yet — go to Studio Models to add one, or upload a new model above.</p>
+            )}
           </div>
           {selectedKey && selectedKey !== "__custom__" && (
-            <div className="cr-ok-banner">✓ Selected: <strong>{resolveModel(models,selectedKey).label}</strong></div>
+            <div className="cr-ok-banner">✓ Selected: <strong>{savedModels.find((m) => m.key === selectedKey)?.label ?? "Model"}</strong></div>
           )}
         </div>
       )}
@@ -1239,15 +1245,15 @@ function WorkflowFlatLay({ models }) {
 
       {step===3 && <Card>
         <SectionTitle>Product Details</SectionTitle>
-        <SectionDesc>Optional — the more context you give, the more accurately the AI can recreate the garment.</SectionDesc>
+        <SectionDesc>Prompt is required — the more context you give, the more accurately the AI can recreate the garment. Other fields are optional.</SectionDesc>
         <div className="cr-two-col">
           <CrInput label="Fabric Type" value={details.fabric} onChange={(v) => D("fabric",v)} placeholder="e.g. Banarasi silk, cotton lawn…" hint="optional" />
           <CrInput label="Fit / Silhouette" value={details.fit} onChange={(v) => D("fit",v)} placeholder="e.g. A-line, slim-fit, flowy…" hint="optional" />
           <CrInput label="Sleeve Details" value={details.sleeve} onChange={(v) => D("sleeve",v)} placeholder="e.g. Bell sleeves, cold-shoulder…" hint="optional" />
           <CrInput label="Embroidery / Print" value={details.embroidery} onChange={(v) => D("embroidery",v)} placeholder="e.g. Gold zari border, floral print…" hint="optional" />
         </div>
-        <CrTextarea label="Additional Notes" value={details.notes} onChange={(v) => D("notes",v)} placeholder="e.g. Drape the dupatta over the left shoulder." hint="optional" />
-        <StepNav onBack={() => setStep(2)} onNext={() => setStep(4)} />
+        <CrTextarea label="Prompt" required value={details.notes} onChange={(v) => D("notes",v)} placeholder="e.g. Drape the dupatta over the left shoulder." />
+        <StepNav onBack={() => setStep(2)} onNext={() => setStep(4)} nextDisabled={!details.notes.trim()} />
       </Card>}
 
       {step===4 && <Card>
@@ -2055,16 +2061,12 @@ const CSS = `
 .cr-model-tabs { display:flex; border:1px solid #E5E7EB; border-radius:10px; overflow:hidden; margin-bottom:14px; }
 .cr-model-tab  { flex:1; padding:10px; font-family:inherit; font-size:13px; font-weight:600; color:#6B7280; background:#F9FAFB; border:none; cursor:pointer; transition:all 0.15s; }
 .cr-model-tab.active { background:#111827; color:#fff; }
-.cr-seg { display:flex; border:1px solid #E5E7EB; border-radius:8px; overflow:hidden; margin-bottom:12px; }
-.cr-seg-btn { flex:1; padding:8px; font-family:inherit; font-size:13px; font-weight:500; color:#6B7280; background:#fff; border:none; cursor:pointer; transition:all 0.15s; }
-.cr-seg-btn.active { background:#111827; color:#fff; }
 .cr-model-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px; }
 @media(max-width:640px){ .cr-model-grid{grid-template-columns:repeat(3,1fr);} }
 @media(max-width:440px){ .cr-model-grid{grid-template-columns:repeat(2,1fr);} }
 .cr-model-card { border:1.5px solid #E5E7EB; border-radius:10px; overflow:hidden; cursor:pointer; background:#fff; transition:all 0.15s; }
-.cr-model-card:hover:not(.empty) { border-color:#4F46E5; transform:translateY(-2px); box-shadow:0 4px 12px rgba(79,70,229,0.1); }
+.cr-model-card:hover { border-color:#4F46E5; transform:translateY(-2px); box-shadow:0 4px 12px rgba(79,70,229,0.1); }
 .cr-model-card.selected { border-color:#111827; box-shadow:0 0 0 2px #111827; }
-.cr-model-card.empty { opacity:0.5; cursor:not-allowed; }
 .cr-model-thumb { height:100px; background:#F9FAFB; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; }
 .cr-model-tick { position:absolute; top:4px; right:4px; width:18px; height:18px; border-radius:50%; background:#111827; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-weight:700; }
 .cr-model-name { font-size:10px; font-weight:500; color:#6B7280; padding:5px 7px 6px; line-height:1.3; }
