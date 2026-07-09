@@ -179,16 +179,22 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
     studioDeleteModelImage: (modelKey) =>
       request('DELETE', '/studio/model-image', { model_key: modelKey }),
 
-    // ── Infographic (OpenAI GPT extraction + PHP GD composition) ─────────────
+    // ── Infographic (OpenAI key-point extraction + OpenAI image generation) ──
+    // 200s — high-quality gpt-image-1 generation at portrait size can take
+    // well over a minute; give it real headroom past the PHP-side timeout
+    // (200s there too — the 'collage' style makes 4 such calls concurrently).
 
     infographicCreate: (data) =>
-      request('POST', '/infographic/create', data, 90_000),
+      request('POST', '/infographic/create', data, 200_000),
 
     infographicExtractPoints: (data) =>
       request('POST', '/infographic/extract-points', data, 30_000),
 
     infographicGenerate: (data) =>
-      request('POST', '/infographic/generate', data, 90_000),
+      request('POST', '/infographic/generate', data, 200_000),
+
+    infographicEdit: (data) =>
+      request('POST', '/infographic/edit', data, 170_000),
 
     // ── Studio v2 (single-flow: saved models, FASHN generation, auto OpenAI marketing infographics) ──
 
