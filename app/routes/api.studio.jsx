@@ -74,9 +74,6 @@ export const action = async ({ request }) => {
     if (!front_image_url) {
       return Response.json({ error: "front_image_url is required" }, { status: 400 });
     }
-    if (!back_image_url) {
-      return Response.json({ error: "back_image_url is required" }, { status: 400 });
-    }
     if (!model_key) {
       return Response.json({ error: "model_key is required" }, { status: 400 });
     }

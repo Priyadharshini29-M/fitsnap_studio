@@ -75,7 +75,7 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
             try { data = JSON.parse(raw); } catch { data = {}; }
             if (!res.ok && (res.statusCode < 200 || res.statusCode >= 300)) {
               const errMsg = data.error ?? data.message ?? data.msg ?? data.detail ?? (Array.isArray(data.errors) ? data.errors[0] : null) ?? `Request failed (HTTP ${res.statusCode})`;
-              resolve({ ok: false, error: errMsg, status: res.statusCode });
+              resolve({ ok: false, error: errMsg, status: res.statusCode, data });
             } else {
               resolve({ ok: true, data });
             }
@@ -151,7 +151,10 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
     // ── Garment Studio ───────────────────────────────────────────────────────
 
     studioGenerate: (data) =>
-      request('POST', '/studio/generate', data, 120_000),
+      request('POST', '/studio/generate', data, 30_000),
+
+    studioGenerateStatus: (sessionId) =>
+      request('GET', `/studio/generate-status?session_id=${encodeURIComponent(sessionId)}`),
 
     studioSetupCheck: () =>
       request('GET', '/studio/setup-check'),
@@ -186,5 +189,41 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
 
     infographicGenerate: (data) =>
       request('POST', '/infographic/generate', data, 90_000),
+
+    // ── Studio v2 (single-flow: saved models, FASHN generation, auto OpenAI marketing infographics) ──
+
+    studioV2UploadModel: (imageUrl) =>
+      request('POST', '/studio-v2/models', { image_url: imageUrl }),
+
+    studioV2ListModels: () =>
+      request('GET', '/studio-v2/models'),
+
+    studioV2DeleteModel: (savedModelId) =>
+      request('DELETE', '/studio-v2/models', { saved_model_id: savedModelId }),
+
+    studioV2Generate: (data) =>
+      request('POST', '/studio-v2/generate', data, 30_000),
+
+    // Longer timeout — the completing poll response also runs the synchronous
+    // 5-image OpenAI marketing-infographic batch before responding.
+    studioV2GenerateStatus: (generationId) =>
+      request('GET', `/studio-v2/generate-status?generation_id=${encodeURIComponent(generationId)}`, null, 120_000),
+
+    studioV2RegenerateInfographics: (generationId) =>
+      request('POST', '/studio-v2/regenerate-infographics', { generation_id: generationId }, 90_000),
+
+    studioV2DeleteGeneration: (generationId) =>
+      request('DELETE', '/studio-v2/generation', { generation_id: generationId }),
+
+    studioV2ListGenerations: (params = {}) => {
+      const qs = new URLSearchParams(params).toString();
+      return request('GET', `/studio-v2/generations${qs ? '?' + qs : ''}`);
+    },
+
+    studioV2GetGeneration: (generationId) =>
+      request('GET', `/studio-v2/generation?generation_id=${encodeURIComponent(generationId)}`),
+
+    studioV2ListAssets: () =>
+      request('GET', '/studio-v2/assets'),
   };
 }

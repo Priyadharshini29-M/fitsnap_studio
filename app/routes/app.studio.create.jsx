@@ -40,21 +40,60 @@ export const action = async ({ request }) => {
       "accessories":      "top",
       "infographic":      "full",
     };
+
+    let modelKey = body.model_key || null;
+
+    // "Upload New Model" in the wizard has no model_key yet — just an ad-hoc
+    // photo URL. Claim the first unused registry slot for its gender and save
+    // the photo there, so it also becomes reusable from "Select Saved Model".
+    // Adult brackets are preferred — an arbitrary uploaded photo is virtually
+    // always an adult, and mislabeling it into a child/teen slot can trip the
+    // AI provider's content-safety checks (and mislabels the model regardless).
+    if (!modelKey && body.model_image_url) {
+      const gender = body.model_gender === "male" ? "male" : "female";
+      const modelsRes = await api.studioGetModels();
+      const models = modelsRes.ok ? (modelsRes.data?.models ?? {}) : {};
+      const slotPriority = [
+        "young_adult", "adult", "mature_adult", "plus_size", "teen_13_17", "child_9_12", "child_5_8",
+      ].map((suffix) => `${gender}_${suffix}`);
+      const emptySlot = slotPriority.map((key) => models[key]).find((m) => m && !m.image_exists);
+      if (!emptySlot) {
+        return Response.json(
+          { error: `No empty ${gender} model slots available. Delete an existing model in Studio Models to add a new one.` },
+          { status: 400 }
+        );
+      }
+      const saveRes = await api.studioSetModelImage(emptySlot.key, body.model_image_url);
+      if (!saveRes.ok) {
+        return Response.json({ error: saveRes.error ?? "Failed to save model photo" }, { status: 500 });
+      }
+      modelKey = emptySlot.key;
+    }
+
     const phpBody = {
       front_image_url:    body.front_image_url    || null,
-      back_image_url:     body.back_image_url     || body.front_image_url || null,
+      back_image_url:     body.back_image_url     || null,
       detail_image_1_url: body.detail_image_1_url || null,
       detail_image_2_url: body.detail_image_2_url || null,
       detail_image_3_url: body.detail_image_3_url || null,
-      model_key:          body.model_key          || null,
+      model_key:          modelKey,
       garment_type:       body.garment_type       ?? garmentTypeByWorkflow[body.workflow_type] ?? "full",
       clothing_prompt:    body.clothing_prompt     || null,
       workflow_type:      body.workflow_type       || null,
+      fashn_model:        body.fashn_model         || null,
     };
     if (!phpBody.front_image_url) {
       return Response.json({ error: "Product image is required." }, { status: 400 });
     }
     const res = await api.studioGenerate(phpBody);
+    if (res.ok) return Response.json(res.data, { status: 200 });
+    return Response.json(
+      { error: res.error, session_id: res.data?.session_id, raw_error: res.data?.raw_error },
+      { status: 500 }
+    );
+  }
+  if (body._action === "generate-status") {
+    const res = await api.studioGenerateStatus(body.session_id);
     return Response.json(res.ok ? res.data : { error: res.error }, { status: res.ok ? 200 : 500 });
   }
   if (body._action === "set-model-image") {
@@ -233,28 +272,6 @@ function CrInput({ label, value, onChange, placeholder, hint }) {
   );
 }
 
-function TagInput({ label, hint, tags, onChange, placeholder }) {
-  const [input, setInput] = useState("");
-  const add = () => {
-    const t = input.trim();
-    if (t && !tags.includes(t)) onChange([...tags, t]);
-    setInput("");
-  };
-  return (
-    <div style={{marginBottom:"14px"}}>
-      <FieldLabel hint={hint}>{label}</FieldLabel>
-      <div className="cr-tags">
-        {tags.map((t) => (
-          <span key={t} className="cr-tag">{t}<button className="cr-tag-x" onClick={() => onChange(tags.filter((x)=>x!==t))}>×</button></span>
-        ))}
-        <input className="cr-tag-input" value={input} onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if(e.key==="Enter"||e.key===","){e.preventDefault();add();} }}
-          placeholder={tags.length===0?placeholder:"Add more…"} />
-      </div>
-    </div>
-  );
-}
-
 // ── Upload Zone ───────────────────────────────────────────────────────────────
 
 function UploadZone({ label, required, value, onChange, hint, compact=false, note }) {
@@ -302,7 +319,10 @@ function UploadZone({ label, required, value, onChange, hint, compact=false, not
       <div
         className={`cr-zone ${drag?"drag":""} ${value?"filled":""} ${error?"errored":""}`}
         style={{height}}
+        role="button"
+        tabIndex={0}
         onClick={() => !uploading && inputRef.current?.click()}
+        onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !uploading) { e.preventDefault(); inputRef.current?.click(); } }}
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={onDrop}
@@ -463,7 +483,15 @@ function SectionDesc({ children }) {
 function InfographicAddon({ checked, onChange, description, onDescriptionChange, style, onStyleChange }) {
   return (
     <div className="cr-addon-row">
-      <div className="cr-addon-inner" onClick={() => onChange(!checked)} style={{cursor:"pointer"}}>
+      <div
+        className="cr-addon-inner"
+        role="switch"
+        aria-checked={checked}
+        tabIndex={0}
+        onClick={() => onChange(!checked)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange(!checked); } }}
+        style={{cursor:"pointer"}}
+      >
         <div className="cr-addon-icon-box">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
             <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.8"/>
@@ -476,7 +504,7 @@ function InfographicAddon({ checked, onChange, description, onDescriptionChange,
         </div>
         <div className="cr-addon-right">
           <span className="cr-addon-credit">+1 credit</span>
-          <div className={`cr-toggle ${checked ? "on" : ""}`} onClick={(e) => { e.stopPropagation(); onChange(!checked); }}>
+          <div className={`cr-toggle ${checked ? "on" : ""}`}>
             <div className="cr-toggle-thumb" />
           </div>
         </div>
@@ -572,24 +600,8 @@ function ModelSelector({ models, selectedKey, onSelect }) {
   const [tab,       setTab]       = useState("saved");
   const [gender,    setGender]    = useState("female");
   const [newUrl,    setNewUrl]    = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [err,       setErr]       = useState(null);
-  const inputRef = useRef(null);
 
   const modelKeys = gender === "female" ? FEMALE_KEYS : MALE_KEYS;
-
-  const handleNewUpload = async (file) => {
-    if (!file) return;
-    if (!file.type.startsWith("image/")) { setErr("Images only."); return; }
-    if (file.size > 5 * 1024 * 1024) { setErr("Max 5 MB."); return; }
-    setUploading(true); setErr(null);
-    try {
-      const url = await uploadToTemp(file);
-      setNewUrl(url);
-      onSelect("__custom__", url);
-    } catch (e) { setErr(e.message ?? "Upload failed."); }
-    finally { setUploading(false); }
-  };
 
   return (
     <div>
@@ -603,8 +615,7 @@ function ModelSelector({ models, selectedKey, onSelect }) {
           <p style={{fontSize:"12px",color:"#6B7280",margin:"0 0 12px",lineHeight:1.6,background:"#F9FAFB",padding:"8px 10px",borderRadius:"6px",borderLeft:"3px solid #D1D5DB"}}>
             Upload a full-body, front-facing model photo on a clean background. Min 768×1024 px. Max 5 MB.
           </p>
-          <UploadZone label="Model Photo" required value={newUrl} onChange={(url) => { setNewUrl(url); onSelect("__custom__", url); }} />
-          {err && <div className="cr-field-error"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{flexShrink:0}}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/><path d="M12 8v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>{err}</div>}
+          <UploadZone label="Model Photo" required value={newUrl} onChange={(url) => { setNewUrl(url); onSelect("__custom__", url, gender); }} />
           {newUrl && <div className="cr-ok-banner">✓ Model photo ready. Continue to the next step.</div>}
         </div>
       ) : (
@@ -621,7 +632,10 @@ function ModelSelector({ models, selectedKey, onSelect }) {
                 <div key={key}
                   className={`cr-model-card ${sel?"selected":""} ${!m.image_exists?"empty":""}`}
                   title={!m.image_exists?"No photo uploaded yet — go to Studio Models to add one":m.label}
-                  onClick={() => m.image_exists && onSelect(key, m.image_url)}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => m.image_exists && onSelect(key, m.image_url, m.gender)}
+                  onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && m.image_exists) { e.preventDefault(); onSelect(key, m.image_url, m.gender); } }}
                 >
                   <div className="cr-model-thumb">
                     {m.image_exists && m.image_url
@@ -698,7 +712,7 @@ function GeneratingScreen({ wfId }) {
     const stage = setInterval(() => setIdx((i) => Math.min(i + 1, stages.length - 1)), 12000);
     const clock = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => { clearInterval(stage); clearInterval(clock); };
-  }, []);
+  }, [stages.length]);
 
   const pct = Math.min(95, Math.round((idx / (stages.length - 1)) * 90) + Math.round(elapsed * 0.3));
 
@@ -789,28 +803,32 @@ function OutputScreen({ result, sessionId, onRegenerate, wfId, infographicResult
       </div>
 
       {/* Result image */}
-      <div className="cr-result-img-wrap">
-        <img src={result} alt="Generated result" className="cr-result-img" />
-      </div>
+      {result && (
+        <>
+          <div className="cr-result-img-wrap">
+            <img src={result} alt="Generated result" className="cr-result-img" />
+          </div>
 
-      {/* Actions */}
-      <div className="cr-result-actions">
-        <button className="cr-btn cr-btn-ghost" onClick={onRegenerate}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{marginRight:"5px"}}><path d="M3 12a9 9 0 119 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M3 7v5h5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          Try Again
-        </button>
-        <button className="cr-btn cr-btn-outline" onClick={download}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{marginRight:"5px"}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" strokeWidth="2"/></svg>
-          Download HD
-        </button>
-        <button className="cr-btn-save" style={{ background: col.accent }} onClick={save}
-          disabled={saved || fetcher.state !== "idle"}>
-          {saved ? "✓ Saved" : fetcher.state !== "idle" ? "Saving…" : "Save to Library →"}
-        </button>
-      </div>
+          {/* Actions */}
+          <div className="cr-result-actions">
+            <button className="cr-btn cr-btn-ghost" onClick={onRegenerate}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{marginRight:"5px"}}><path d="M3 12a9 9 0 119 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M3 7v5h5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              Try Again
+            </button>
+            <button className="cr-btn cr-btn-outline" onClick={download}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{marginRight:"5px"}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" strokeWidth="2"/></svg>
+              Download HD
+            </button>
+            <button className="cr-btn-save" style={{ background: col.accent }} onClick={save}
+              disabled={saved || fetcher.state !== "idle"}>
+              {saved ? "✓ Saved" : fetcher.state !== "idle" ? "Saving…" : "Save to Library →"}
+            </button>
+          </div>
+        </>
+      )}
 
-      {/* Infographic addon result */}
-      {(infographicLoading || infographicResult) && (
+      {/* Infographic result — OpenAI-generated creative variants */}
+      {(infographicLoading || infographicResult?.length > 0) && (
         <div className="cr-info-result">
           <div className="cr-info-result-hdr">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{color:"#059669",flexShrink:0}}>
@@ -823,24 +841,33 @@ function OutputScreen({ result, sessionId, onRegenerate, wfId, infographicResult
           {infographicLoading && (
             <div className="cr-info-loading">
               <Spin size={16} color="#059669" />
-              <span className="cr-info-loading-text">Generating infographic in background…</span>
+              <span className="cr-info-loading-text">Generating creatives in background…</span>
             </div>
           )}
-          {infographicResult && (
-            <div>
-              <div className="cr-result-img-wrap" style={{marginTop:"10px"}}>
-                <img src={infographicResult} alt="Infographic" className="cr-result-img" />
-              </div>
-              <div style={{display:"flex",gap:"8px",flexWrap:"wrap",paddingTop:"10px"}}>
-                <a href={infographicResult} download={`infographic_${Date.now()}.jpg`} className="cr-btn cr-btn-outline">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{marginRight:"5px"}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" strokeWidth="2"/></svg>
-                  Download Infographic
-                </a>
-              </div>
-            </div>
-          )}
+          {infographicResult?.length > 0 && <InfographicGallery results={infographicResult} />}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Grid of OpenAI-generated infographic creative variants, one per layout template. */
+function InfographicGallery({ results }) {
+  return (
+    <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(results.length,3)}, minmax(0,1fr))`,gap:"12px",marginTop:"10px"}}>
+      {results.map((r) => (
+        <div key={r.key}>
+          <div className="cr-result-img-wrap">
+            <img src={r.image} alt={r.label} className="cr-result-img" />
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:"8px",gap:"8px"}}>
+            <span style={{fontSize:"12px",fontWeight:600,color:"#374151"}}>{r.label}</span>
+            <a href={r.image} download={`infographic_${r.key}_${Date.now()}.png`} className="cr-btn cr-btn-outline" style={{padding:"4px 10px",fontSize:"12px"}}>
+              Download
+            </a>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -876,27 +903,60 @@ function WorkflowModelGeneration({ models }) {
   const [extraErr, setExtraErr] = useState(null);
   const [selectedModel, setSelectedModel] = useState(null);
   const [modelUrl, setModelUrl] = useState(null);
+  const [modelGender, setModelGender] = useState(null);
   const [settings, setSettings] = useState({ gender:"female", ageGroup:"adult", ethnicity:"any", bodyType:"average", pose:"standing-natural", background:"clean-white", aspectRatio:"3:4" });
   const [result, setResult]     = useState(null);
   const [sessionId, setSessionId] = useState(null);
+  const [pendingSessionId, setPendingSessionId] = useState(null);
   const [error, setError]       = useState(null);
   const [withInfographic, setWithInfographic] = useState(false);
   const [infoDescription, setInfoDescription] = useState("");
   const [infoStyle,       setInfoStyle]       = useState("modern");
   const [infographicResult, setInfographicResult] = useState(null);
+  const statusFetcher = useFetcher();
 
-  const isGenerating = fetcher.state !== "idle";
+  const isGenerating = fetcher.state !== "idle" || !!pendingSessionId;
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data) {
-      if (fetcher.data.result_image) { setResult(fetcher.data.result_image); setSessionId(fetcher.data.session_id ?? null); setStep(6); }
+      if (fetcher.data.status === "processing" && fetcher.data.session_id) { setPendingSessionId(fetcher.data.session_id); }
       else if (fetcher.data.error) { setError(fetcher.data.error); setStep(4); } // back to Review on failure
     }
   }, [fetcher.state, fetcher.data]);
 
+  // Poll for the async result — generation runs on Fashn's side and a single
+  // request can't block on it without risking the host's connection timeout.
   useEffect(() => {
-    if (infoFetcher.state === "idle" && infoFetcher.data?.result_image) {
-      setInfographicResult(infoFetcher.data.result_image);
+    if (!pendingSessionId) return;
+    const poll = () => {
+      if (statusFetcher.state === "idle") {
+        statusFetcher.submit({ _action: "generate-status", session_id: pendingSessionId },
+          { method: "POST", action: "/app/studio/create", encType: "application/json" });
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [pendingSessionId, statusFetcher]);
+
+  useEffect(() => {
+    if (statusFetcher.state === "idle" && statusFetcher.data) {
+      if (statusFetcher.data.status === "completed") {
+        setResult(statusFetcher.data.result_image);
+        setSessionId(statusFetcher.data.session_id ?? null);
+        setPendingSessionId(null);
+        setStep(6);
+      } else if (statusFetcher.data.status === "failed") {
+        setError(statusFetcher.data.error);
+        setPendingSessionId(null);
+        setStep(4); // back to Review on failure
+      }
+    }
+  }, [statusFetcher.state, statusFetcher.data]);
+
+  useEffect(() => {
+    if (infoFetcher.state === "idle" && infoFetcher.data?.results?.length) {
+      setInfographicResult(infoFetcher.data.results);
     }
   }, [infoFetcher.state, infoFetcher.data]);
 
@@ -917,12 +977,13 @@ function WorkflowModelGeneration({ models }) {
     fetcher.submit({
       _action: "generate", workflow_type: "model-generation",
       front_image_url: frontUrl,
-      back_image_url: backUrl || frontUrl,
+      back_image_url: backUrl || null,
       detail_image_1_url: extraUrls[0] || null,
       detail_image_2_url: extraUrls[1] || null,
       detail_image_3_url: extraUrls[2] || null,
       model_key: selectedModel !== "__custom__" ? selectedModel : null,
       model_image_url: selectedModel === "__custom__" ? modelUrl : null,
+      model_gender: selectedModel === "__custom__" ? modelGender : null,
       garment_type: productCat?.garmentType ?? wearType ?? "full",
       clothing_prompt: productPrompt || null,
       ...settings,
@@ -980,7 +1041,13 @@ function WorkflowModelGeneration({ models }) {
                 </div>
               ))}
               {extraUrls.length < 3 && (
-                <div className={`cr-img-add ${uploadingExtra ? "busy" : ""}`} onClick={() => !uploadingExtra && extraRef.current?.click()}>
+                <div
+                  className={`cr-img-add ${uploadingExtra ? "busy" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => !uploadingExtra && extraRef.current?.click()}
+                  onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !uploadingExtra) { e.preventDefault(); extraRef.current?.click(); } }}
+                >
                   {uploadingExtra ? <Spin size={18} /> : <><svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{color:"#9CA3AF"}}><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg><span style={{fontSize:"11px",color:"#9CA3AF",marginTop:"3px"}}>Add Image</span></>}
                 </div>
               )}
@@ -996,7 +1063,7 @@ function WorkflowModelGeneration({ models }) {
         <Card>
           <SectionTitle>Select Model</SectionTitle>
           <SectionDesc>Choose a saved studio model or upload a new reference photo.</SectionDesc>
-          <ModelSelector models={models} selectedKey={selectedModel} onSelect={(k,u) => { setSelectedModel(k); setModelUrl(u); }} />
+          <ModelSelector models={models} selectedKey={selectedModel} onSelect={(k,u,g) => { setSelectedModel(k); setModelUrl(u); setModelGender(g); }} />
           <StepNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!selectedModel} />
         </Card>
       )}
@@ -1055,27 +1122,59 @@ function WorkflowFlatLay({ models }) {
   const [flatUrl, setFlatUrl]   = useState(null);
   const [selectedModel, setSelectedModel] = useState(null);
   const [modelUrl, setModelUrl] = useState(null);
+  const [modelGender, setModelGender] = useState(null);
   const [details, setDetails]   = useState({ fabric:"", fit:"", sleeve:"", embroidery:"", notes:"" });
   const [settings, setSettings] = useState({ pose:"standing-natural", background:"clean-white", aspectRatio:"3:4", resolution:"standard" });
+  const [fashnModel, setFashnModel] = useState("tryon-v1.6");
   const [result, setResult]     = useState(null);
   const [sessionId, setSessionId] = useState(null);
+  const [pendingSessionId, setPendingSessionId] = useState(null);
   const [error, setError]       = useState(null);
   const [withInfographic, setWithInfographic] = useState(false);
   const [infoDescription, setInfoDescription] = useState("");
   const [infoStyle,       setInfoStyle]       = useState("modern");
   const [infographicResult, setInfographicResult] = useState(null);
-  const isGenerating = fetcher.state !== "idle";
+  const statusFetcher = useFetcher();
+  const isGenerating = fetcher.state !== "idle" || !!pendingSessionId;
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data) {
-      if (fetcher.data.result_image) { setResult(fetcher.data.result_image); setSessionId(fetcher.data.session_id??null); setStep(7); }
+      if (fetcher.data.status === "processing" && fetcher.data.session_id) { setPendingSessionId(fetcher.data.session_id); }
       else if (fetcher.data.error) { setError(fetcher.data.error); setStep(5); } // back to Review on failure
     }
   }, [fetcher.state, fetcher.data]);
 
   useEffect(() => {
-    if (infoFetcher.state === "idle" && infoFetcher.data?.result_image) {
-      setInfographicResult(infoFetcher.data.result_image);
+    if (!pendingSessionId) return;
+    const poll = () => {
+      if (statusFetcher.state === "idle") {
+        statusFetcher.submit({ _action: "generate-status", session_id: pendingSessionId },
+          { method: "POST", action: "/app/studio/create", encType: "application/json" });
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [pendingSessionId, statusFetcher]);
+
+  useEffect(() => {
+    if (statusFetcher.state === "idle" && statusFetcher.data) {
+      if (statusFetcher.data.status === "completed") {
+        setResult(statusFetcher.data.result_image);
+        setSessionId(statusFetcher.data.session_id ?? null);
+        setPendingSessionId(null);
+        setStep(7);
+      } else if (statusFetcher.data.status === "failed") {
+        setError(statusFetcher.data.error);
+        setPendingSessionId(null);
+        setStep(5); // back to Review on failure
+      }
+    }
+  }, [statusFetcher.state, statusFetcher.data]);
+
+  useEffect(() => {
+    if (infoFetcher.state === "idle" && infoFetcher.data?.results?.length) {
+      setInfographicResult(infoFetcher.data.results);
     }
   }, [infoFetcher.state, infoFetcher.data]);
 
@@ -1086,11 +1185,14 @@ function WorkflowFlatLay({ models }) {
     const productCat = PRODUCT_CATS.find(c => c.id === productType);
     fetcher.submit({
       _action:"generate", workflow_type:"flat-lay",
-      front_image_url:flatUrl, back_image_url:flatUrl,
+      front_image_url:flatUrl, back_image_url:null,
       model_key: selectedModel!=="__custom__"?selectedModel:null,
       model_image_url: selectedModel==="__custom__"?modelUrl:null,
+      model_gender: selectedModel==="__custom__"?modelGender:null,
       garment_type: productCat?.garmentType ?? wearType ?? "full",
-      clothing_prompt: fullPrompt||null, ...settings,
+      clothing_prompt: fullPrompt||null,
+      fashn_model: fashnModel,
+      ...settings,
     }, { method:"POST", action:"/app/studio/create", encType:"application/json" });
     if (withInfographic && infoDescription.trim()) {
       infoFetcher.submit({
@@ -1131,7 +1233,7 @@ function WorkflowFlatLay({ models }) {
 
       {step===2 && <Card>
         <SectionTitle>Select Model</SectionTitle>
-        <ModelSelector models={models} selectedKey={selectedModel} onSelect={(k,u) => { setSelectedModel(k); setModelUrl(u); }} />
+        <ModelSelector models={models} selectedKey={selectedModel} onSelect={(k,u,g) => { setSelectedModel(k); setModelUrl(u); setModelGender(g); }} />
         <StepNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!selectedModel} />
       </Card>}
 
@@ -1155,6 +1257,7 @@ function WorkflowFlatLay({ models }) {
           <CrSelect label="Background" value={settings.background} onChange={(v) => S("background",v)} options={[{value:"clean-white",label:"Clean White"},{value:"solid-light-grey",label:"Light Grey"},{value:"gradient-soft",label:"Soft Gradient"},{value:"lifestyle-indoor",label:"Lifestyle Indoor"},{value:"lifestyle-outdoor",label:"Lifestyle Outdoor"}]} />
           <CrSelect label="Aspect Ratio" value={settings.aspectRatio} onChange={(v) => S("aspectRatio",v)} options={[{value:"1:1",label:"1:1 — Square"},{value:"3:4",label:"3:4 — Portrait"},{value:"4:5",label:"4:5 — Instagram"},{value:"9:16",label:"9:16 — Stories"}]} />
           <CrSelect label="Resolution" value={settings.resolution} onChange={(v) => S("resolution",v)} options={[{value:"standard",label:"Standard (1024 px)"},{value:"high",label:"High (2048 px)"},{value:"ultra",label:"Ultra HD (4096 px)"}]} />
+          <CrSelect label="AI Engine" value={fashnModel} onChange={setFashnModel} options={[{value:"tryon-v1.6",label:"Standard (tryon-v1.6)"},{value:"tryon-max",label:"Try-On Max (higher quality)"},{value:"product-to-model",label:"Product to Model (best for saree/lehenga drape)"}]} />
         </div>
         <StepNav onBack={() => setStep(3)} onNext={() => setStep(5)} />
       </Card>}
@@ -1162,7 +1265,7 @@ function WorkflowFlatLay({ models }) {
       {step===5 && <Card>
         <SectionTitle>Review & Generate</SectionTitle>
         <div style={{display:"flex",gap:"16px",marginBottom:"4px"}}><ReviewThumb label="Flat Lay" src={flatUrl} /></div>
-        <ReviewTable rows={[["Product",PRODUCT_CATS.find(c=>c.id===productType)?.label??"-"],["Shot Type",wearType],["Fabric",details.fabric],["Fit",details.fit],["Pose",settings.pose],["Background",settings.background],["Aspect Ratio",settings.aspectRatio]]} />
+        <ReviewTable rows={[["Product",PRODUCT_CATS.find(c=>c.id===productType)?.label??"-"],["Shot Type",wearType],["Fabric",details.fabric],["Fit",details.fit],["Pose",settings.pose],["Background",settings.background],["Aspect Ratio",settings.aspectRatio],["AI Engine",fashnModel]]} />
         <InfographicAddon
           checked={withInfographic} onChange={(v) => { setWithInfographic(v); if (!v) setInfographicResult(null); }}
           description={infoDescription} onDescriptionChange={setInfoDescription}
@@ -1188,26 +1291,57 @@ function WorkflowMannequin({ models }) {
   const [mannUrl, setMannUrl]   = useState(null);
   const [selectedModel, setSelectedModel] = useState(null);
   const [modelUrl, setModelUrl] = useState(null);
+  const [modelGender, setModelGender] = useState(null);
   const [settings, setSettings] = useState({ pose:"standing-natural", expression:"natural", background:"clean-white", cameraAngle:"front" });
   const [result, setResult]     = useState(null);
   const [sessionId, setSessionId] = useState(null);
+  const [pendingSessionId, setPendingSessionId] = useState(null);
   const [error, setError]       = useState(null);
   const [withInfographic, setWithInfographic] = useState(false);
   const [infoDescription, setInfoDescription] = useState("");
   const [infoStyle,       setInfoStyle]       = useState("modern");
   const [infographicResult, setInfographicResult] = useState(null);
-  const isGenerating = fetcher.state !== "idle";
+  const statusFetcher = useFetcher();
+  const isGenerating = fetcher.state !== "idle" || !!pendingSessionId;
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data) {
-      if (fetcher.data.result_image) { setResult(fetcher.data.result_image); setSessionId(fetcher.data.session_id??null); setStep(6); }
+      if (fetcher.data.status === "processing" && fetcher.data.session_id) { setPendingSessionId(fetcher.data.session_id); }
       else if (fetcher.data.error) { setError(fetcher.data.error); setStep(4); } // back to Review on failure
     }
   }, [fetcher.state, fetcher.data]);
 
   useEffect(() => {
-    if (infoFetcher.state === "idle" && infoFetcher.data?.result_image) {
-      setInfographicResult(infoFetcher.data.result_image);
+    if (!pendingSessionId) return;
+    const poll = () => {
+      if (statusFetcher.state === "idle") {
+        statusFetcher.submit({ _action: "generate-status", session_id: pendingSessionId },
+          { method: "POST", action: "/app/studio/create", encType: "application/json" });
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [pendingSessionId, statusFetcher]);
+
+  useEffect(() => {
+    if (statusFetcher.state === "idle" && statusFetcher.data) {
+      if (statusFetcher.data.status === "completed") {
+        setResult(statusFetcher.data.result_image);
+        setSessionId(statusFetcher.data.session_id ?? null);
+        setPendingSessionId(null);
+        setStep(6);
+      } else if (statusFetcher.data.status === "failed") {
+        setError(statusFetcher.data.error);
+        setPendingSessionId(null);
+        setStep(4); // back to Review on failure
+      }
+    }
+  }, [statusFetcher.state, statusFetcher.data]);
+
+  useEffect(() => {
+    if (infoFetcher.state === "idle" && infoFetcher.data?.results?.length) {
+      setInfographicResult(infoFetcher.data.results);
     }
   }, [infoFetcher.state, infoFetcher.data]);
 
@@ -1217,9 +1351,10 @@ function WorkflowMannequin({ models }) {
     const productCat = PRODUCT_CATS.find(c => c.id === productType);
     fetcher.submit({
       _action:"generate", workflow_type:"mannequin",
-      front_image_url:mannUrl, back_image_url:mannUrl,
+      front_image_url:mannUrl, back_image_url:null,
       model_key: selectedModel!=="__custom__"?selectedModel:null,
       model_image_url: selectedModel==="__custom__"?modelUrl:null,
+      model_gender: selectedModel==="__custom__"?modelGender:null,
       garment_type: productCat?.garmentType ?? wearType ?? "full",
       clothing_prompt: productPrompt||null, ...settings,
     }, { method:"POST", action:"/app/studio/create", encType:"application/json" });
@@ -1261,7 +1396,7 @@ function WorkflowMannequin({ models }) {
 
       {step===2 && <Card>
         <SectionTitle>Select Model</SectionTitle>
-        <ModelSelector models={models} selectedKey={selectedModel} onSelect={(k,u) => { setSelectedModel(k); setModelUrl(u); }} />
+        <ModelSelector models={models} selectedKey={selectedModel} onSelect={(k,u,g) => { setSelectedModel(k); setModelUrl(u); setModelGender(g); }} />
         <StepNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!selectedModel} />
       </Card>}
 
@@ -1315,10 +1450,12 @@ function WorkflowAccessories({ models }) {
   const [accUrl,       setAccUrl]       = useState(null);
   const [selectedModel,setSelectedModel]= useState(null);
   const [modelUrl,     setModelUrl]     = useState(null);
+  const [modelGender,  setModelGender]  = useState(null);
   const [placement,    setPlacement]    = useState(ACCESSORY_PLACEMENTS["watch"][0]);
   const [settings,     setSettings]     = useState({ pose:"standing-natural", background:"clean-white", styling:"editorial" });
   const [result,       setResult]       = useState(null);
   const [sessionId,    setSessionId]    = useState(null);
+  const [pendingSessionId, setPendingSessionId] = useState(null);
   const [error,        setError]        = useState(null);
   const [withInfographic,    setWithInfographic]    = useState(false);
   const [infoDescription,    setInfoDescription]    = useState("");
@@ -1330,30 +1467,60 @@ function WorkflowAccessories({ models }) {
   const [igImageUrl,setIgImageUrl]= useState(null);
   const [igDesc,    setIgDesc]    = useState("");
   const [igStyle,   setIgStyle]   = useState("luxury");
-  const [igResult,  setIgResult]  = useState(null);
+  const [igResults, setIgResults] = useState(null);
   const [igKPs,     setIgKPs]     = useState([]);
   const [igError,   setIgError]   = useState(null);
 
   // ── Effects ───────────────────────────────────────────────────────────────
   useEffect(() => { setPlacement(ACCESSORY_PLACEMENTS[category]?.[0]??""); }, [category]);
 
+  const statusFetcher = useFetcher();
+
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data) {
-      if (fetcher.data.result_image) { setResult(fetcher.data.result_image); setSessionId(fetcher.data.session_id??null); setStep(7); }
+      if (fetcher.data.status === "processing" && fetcher.data.session_id) { setPendingSessionId(fetcher.data.session_id); }
       else if (fetcher.data.error)   { setError(fetcher.data.error); setStep(5); }
     }
   }, [fetcher.state, fetcher.data]);
 
   useEffect(() => {
-    if (infoFetcher.state === "idle" && infoFetcher.data?.result_image) {
-      setInfographicResult(infoFetcher.data.result_image);
+    if (!pendingSessionId) return;
+    const poll = () => {
+      if (statusFetcher.state === "idle") {
+        statusFetcher.submit({ _action: "generate-status", session_id: pendingSessionId },
+          { method: "POST", action: "/app/studio/create", encType: "application/json" });
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [pendingSessionId, statusFetcher]);
+
+  useEffect(() => {
+    if (statusFetcher.state === "idle" && statusFetcher.data) {
+      if (statusFetcher.data.status === "completed") {
+        setResult(statusFetcher.data.result_image);
+        setSessionId(statusFetcher.data.session_id ?? null);
+        setPendingSessionId(null);
+        setStep(7);
+      } else if (statusFetcher.data.status === "failed") {
+        setError(statusFetcher.data.error);
+        setPendingSessionId(null);
+        setStep(5);
+      }
+    }
+  }, [statusFetcher.state, statusFetcher.data]);
+
+  useEffect(() => {
+    if (infoFetcher.state === "idle" && infoFetcher.data?.results?.length) {
+      setInfographicResult(infoFetcher.data.results);
     }
   }, [infoFetcher.state, infoFetcher.data]);
 
   useEffect(() => {
     if (igFetcher.state === "idle" && igFetcher.data) {
-      if (igFetcher.data.result_image) {
-        setIgResult(igFetcher.data.result_image);
+      if (igFetcher.data.results?.length) {
+        setIgResults(igFetcher.data.results);
         setIgKPs(igFetcher.data.key_points ?? []);
         setIgStep(4);
       } else if (igFetcher.data.error) {
@@ -1370,9 +1537,10 @@ function WorkflowAccessories({ models }) {
     const fullPrompt    = [productPrompt, `${category}: ${placement}`].filter(Boolean).join("; ");
     fetcher.submit({
       _action:"generate", workflow_type:"accessories",
-      front_image_url: accUrl, back_image_url: accUrl,
+      front_image_url: accUrl, back_image_url: null,
       model_key:       selectedModel !== "__custom__" ? selectedModel : null,
       model_image_url: selectedModel === "__custom__" ? modelUrl : null,
+      model_gender:    selectedModel === "__custom__" ? modelGender : null,
       clothing_prompt: fullPrompt, ...settings,
     }, { method:"POST", action:"/app/studio/create", encType:"application/json" });
     if (withInfographic && infoDescription.trim()) {
@@ -1395,7 +1563,7 @@ function WorkflowAccessories({ models }) {
 
   const modelSteps = ["Product Type","Accessory Image","Model","Placement","Settings","Review","Output"];
   const igSteps    = ["Accessory Image","Description","Style","Review","Output"];
-  const isModelGenerating = fetcher.state   !== "idle";
+  const isModelGenerating = fetcher.state !== "idle" || !!pendingSessionId;
   const isIgGenerating    = igFetcher.state !== "idle";
 
   // ── Mode selector (initial screen) ────────────────────────────────────────
@@ -1406,7 +1574,9 @@ function WorkflowAccessories({ models }) {
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"14px",marginTop:"10px"}}>
 
         {/* Model Try-On */}
-        <div className="cr-mode-card" onClick={() => setMode("model")}
+        <div className="cr-mode-card" role="button" tabIndex={0}
+          onClick={() => setMode("model")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMode("model"); } }}
           onMouseEnter={(e)=>{e.currentTarget.style.borderColor=col.accent;e.currentTarget.style.boxShadow=`0 4px 20px ${col.accent}22`;}}
           onMouseLeave={(e)=>{e.currentTarget.style.borderColor="#E5E7EB";e.currentTarget.style.boxShadow="none";}}>
           <div className="cr-mode-icon" style={{background:col.light,color:col.accent}}>
@@ -1418,7 +1588,9 @@ function WorkflowAccessories({ models }) {
         </div>
 
         {/* Infographic */}
-        <div className="cr-mode-card" onClick={() => setMode("infographic")}
+        <div className="cr-mode-card" role="button" tabIndex={0}
+          onClick={() => setMode("infographic")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMode("infographic"); } }}
           onMouseEnter={(e)=>{e.currentTarget.style.borderColor="#10B981";e.currentTarget.style.boxShadow="0 4px 20px #10B98122";}}
           onMouseLeave={(e)=>{e.currentTarget.style.borderColor="#E5E7EB";e.currentTarget.style.boxShadow="none";}}>
           <div className="cr-mode-icon" style={{background:"#D1FAE5",color:"#059669"}}>
@@ -1434,15 +1606,15 @@ function WorkflowAccessories({ models }) {
 
   // ── Infographic flow ──────────────────────────────────────────────────────
   if (mode === "infographic") {
-    const onBack0 = () => { setMode(null); setIgStep(0); setIgResult(null); setIgKPs([]); setIgError(null); };
+    const onBack0 = () => { setMode(null); setIgStep(0); setIgResults(null); setIgKPs([]); setIgError(null); };
 
-    if (igStep === 4 && igResult) return (
+    if (igStep === 4 && igResults?.length) return (
       <div>
         <Stepper steps={igSteps} wfId="infographic" current={4} />
         <Card>
-          <OutputScreen result={igResult} sessionId={null} wfId="infographic"
-            onRegenerate={() => { setIgResult(null); setIgKPs([]); setIgStep(2); }}
-            infographicResult={null} infographicLoading={false} />
+          <OutputScreen result={null} sessionId={null} wfId="infographic"
+            onRegenerate={() => { setIgResults(null); setIgKPs([]); setIgStep(2); }}
+            infographicResult={igResults} infographicLoading={false} />
           {igKPs.length > 0 && (
             <div style={{marginTop:"16px",padding:"14px",background:"#F0FDF4",borderRadius:"10px",border:"1px solid #D1FAE5"}}>
               <p style={{fontSize:"12px",fontWeight:700,color:"#065F46",margin:"0 0 8px"}}>Key highlights used in this infographic</p>
@@ -1478,7 +1650,7 @@ function WorkflowAccessories({ models }) {
           <CrTextarea label="Product Description" required value={igDesc} onChange={setIgDesc} rows={5}
             placeholder="e.g. This 18-karat gold-plated watch features a sapphire crystal glass, Italian leather strap, and 50m water resistance. Swiss movement, 3-year international warranty." />
           <p style={{fontSize:"12px",color:"#6B7280",margin:"-4px 0 0",lineHeight:1.5}}>
-            AI extracts highlights like <em>"18k Gold Plated"</em>, <em>"Sapphire Crystal"</em>, <em>"50m Water Resistant"</em> — short phrases only, never sentences.
+            AI extracts highlights like <em>&ldquo;18k Gold Plated&rdquo;</em>, <em>&ldquo;Sapphire Crystal&rdquo;</em>, <em>&ldquo;50m Water Resistant&rdquo;</em> — short phrases only, never sentences.
           </p>
           <StepNav onBack={() => setIgStep(0)} onNext={() => setIgStep(2)} nextDisabled={!igDesc.trim()} />
         </Card>}
@@ -1488,7 +1660,11 @@ function WorkflowAccessories({ models }) {
           <SectionDesc>Pick the visual theme for your accessory infographic.</SectionDesc>
           <div className="cr-template-list">
             {TEMPLATES.map((t) => (
-              <div key={t.id} className={`cr-template-row ${igStyle===t.id?"selected":""}`} onClick={() => setIgStyle(t.id)}>
+              <div key={t.id} className={`cr-template-row ${igStyle===t.id?"selected":""}`}
+                role="button" tabIndex={0}
+                onClick={() => setIgStyle(t.id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIgStyle(t.id); } }}
+              >
                 <div className="cr-template-dot" style={{background:t.id==="luxury"?"#B48C32":t.id==="modern"?"#2563EB":t.id==="minimal"?"#E5E7EB":t.id==="ecommerce"?"#059669":"#6366F1"}} />
                 <div style={{flex:1}}>
                   <p style={{fontWeight:600,fontSize:"13px",color:"#111827",margin:"0 0 2px"}}>{t.label}</p>
@@ -1573,7 +1749,7 @@ function WorkflowAccessories({ models }) {
 
       {step===2 && <Card>
         <SectionTitle>Select Model</SectionTitle>
-        <ModelSelector models={models} selectedKey={selectedModel} onSelect={(k,u) => { setSelectedModel(k); setModelUrl(u); }} />
+        <ModelSelector models={models} selectedKey={selectedModel} onSelect={(k,u,g) => { setSelectedModel(k); setModelUrl(u); setModelGender(g); }} />
         <StepNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!selectedModel} />
       </Card>}
 
@@ -1617,212 +1793,6 @@ function WorkflowAccessories({ models }) {
 
 // ── (Infographic runs as an inline addon in the Review step of each workflow) ──
 
-function WorkflowInfographic() { return null; }
-function _WorkflowInfographicFull() {
-  const wfId = "infographic";
-  const genFetcher     = useFetcher();
-  const extractFetcher = useFetcher();
-
-  const [step,        setStep]        = useState(0);
-  const [imageUrl,    setImageUrl]    = useState(null);
-  const [description, setDescription] = useState("");
-  const [keyPoints,   setKeyPoints]   = useState([]);
-  const [newPoint,    setNewPoint]    = useState("");
-  const [style,       setStyle]       = useState("modern");
-  const [result,      setResult]      = useState(null);
-  const [error,       setError]       = useState(null);
-
-  const isExtracting = extractFetcher.state !== "idle";
-  const isGenerating = genFetcher.state     !== "idle";
-
-  // ── Extract key points response ─────────────────────────────────────────────
-  useEffect(() => {
-    if (extractFetcher.state === "idle" && extractFetcher.data) {
-      if (extractFetcher.data.key_points) {
-        setKeyPoints(extractFetcher.data.key_points);
-        setStep(2);
-      } else if (extractFetcher.data.error) {
-        setError(extractFetcher.data.error);
-      }
-    }
-  }, [extractFetcher.state, extractFetcher.data]);
-
-  // ── Generate infographic response ───────────────────────────────────────────
-  useEffect(() => {
-    if (genFetcher.state === "idle" && genFetcher.data) {
-      if (genFetcher.data.result_image) { setResult(genFetcher.data.result_image); setStep(5); }
-      else if (genFetcher.data.error)   { setError(genFetcher.data.error); setStep(4); }
-    }
-  }, [genFetcher.state, genFetcher.data]);
-
-  const handleExtract = () => {
-    if (!description.trim()) return;
-    setError(null);
-    extractFetcher.submit(
-      { _action: "infographic-extract", description },
-      { method: "POST", action: "/app/studio/create", encType: "application/json" }
-    );
-  };
-
-  const doGenerate = () => {
-    setError(null);
-    genFetcher.submit(
-      { _action: "infographic-generate", product_image_url: imageUrl, key_points: keyPoints, style },
-      { method: "POST", action: "/app/studio/create", encType: "application/json" }
-    );
-  };
-
-  const removePoint = (i) => setKeyPoints((p) => p.filter((_, j) => j !== i));
-  const addPoint    = () => {
-    const t = newPoint.trim();
-    if (t && !keyPoints.includes(t)) setKeyPoints((p) => [...p, t]);
-    setNewPoint("");
-  };
-
-  const steps = WORKFLOWS.find(w => w.id === "infographic").steps;
-  const col   = WF_COLORS["infographic"];
-
-  // Output
-  if (step === 5 && result) return (
-    <div>
-      <Stepper steps={steps} wfId={wfId} current={5} />
-      <Card>
-        <OutputScreen result={result} sessionId={null} wfId={wfId}
-          onRegenerate={() => { setResult(null); setStep(4); }}
-          infographicResult={null} infographicLoading={false} />
-      </Card>
-    </div>
-  );
-
-  // Generating
-  if (isGenerating) return (
-    <div><Stepper steps={steps} wfId={wfId} current={4} /><Card><GeneratingScreen wfId={wfId} /></Card></div>
-  );
-
-  return (
-    <div>
-      <Stepper steps={steps} wfId={wfId} current={step} />
-      {error && <ErrBanner msg={error} onDismiss={() => setError(null)} />}
-
-      {/* Step 0 — Product Image */}
-      {step === 0 && <Card>
-        <SectionTitle>Upload Product Image</SectionTitle>
-        <SectionDesc>Upload a clean product photo. It will be the centrepiece of your infographic — no model needed.</SectionDesc>
-        <div className="cr-req-row">{["Clean background","High resolution","JPEG / PNG / WEBP"].map(r=><span key={r} className="cr-req">{r}</span>)}</div>
-        <UploadZone label="Product Photo" required value={imageUrl} onChange={setImageUrl} />
-        <StepNav onNext={() => setStep(1)} nextDisabled={!imageUrl} />
-      </Card>}
-
-      {/* Step 1 — Description */}
-      {step === 1 && <Card>
-        <SectionTitle>Describe Your Product</SectionTitle>
-        <SectionDesc>Paste a paragraph about your product. AI will extract short highlights — never full sentences — to use as callout badges on the infographic.</SectionDesc>
-        <CrTextarea
-          label="Product Description"
-          value={description}
-          onChange={setDescription}
-          placeholder="e.g. This Banarasi silk saree is crafted from 100% pure Katan silk with intricate gold zari weaving across the pallu. It features a double-layered border, hand-finished edges, and is available in free size. Dry clean only."
-          rows={6}
-        />
-        <p style={{fontSize:"12px",color:"#6B7280",margin:"-6px 0 14px",lineHeight:1.5}}>
-          AI reads this paragraph and extracts 3–5 short phrases (e.g. <em>"Pure Katan Silk"</em>, <em>"Gold Zari Weave"</em>, <em>"Dry Clean Only"</em>) for the infographic callouts.
-        </p>
-        <StepNav
-          onBack={() => setStep(0)}
-          onNext={handleExtract}
-          nextLabel={isExtracting ? "Extracting…" : "Extract Key Points →"}
-          nextDisabled={!description.trim() || isExtracting}
-        />
-        {isExtracting && (
-          <div style={{display:"flex",alignItems:"center",gap:"8px",marginTop:"10px",color:col.accent,fontSize:"13px"}}>
-            <Spin size={14} color={col.accent} /> Reading your description with AI…
-          </div>
-        )}
-      </Card>}
-
-      {/* Step 2 — Key Points Review */}
-      {step === 2 && <Card>
-        <SectionTitle>Review Key Points</SectionTitle>
-        <SectionDesc>These short highlights will appear as bold badges on your infographic. Remove any you don't want, or add your own (2–5 words each).</SectionDesc>
-
-        <div style={{marginBottom:"16px"}}>
-          <FieldLabel>Extracted Highlights</FieldLabel>
-          <div style={{display:"flex",flexWrap:"wrap",gap:"8px",marginBottom:"12px"}}>
-            {keyPoints.map((pt, i) => (
-              <span key={i} style={{
-                display:"inline-flex",alignItems:"center",gap:"6px",
-                background:col.light,color:col.accent,
-                fontWeight:700,fontSize:"13px",
-                padding:"5px 12px",borderRadius:"999px",
-              }}>
-                {pt}
-                <button onClick={() => removePoint(i)} style={{
-                  background:"none",border:"none",cursor:"pointer",
-                  color:col.accent,fontSize:"15px",lineHeight:1,padding:"0 0 0 2px",
-                }}>×</button>
-              </span>
-            ))}
-            {keyPoints.length === 0 && (
-              <span style={{fontSize:"12px",color:"#9CA3AF",fontStyle:"italic"}}>No highlights — add one below.</span>
-            )}
-          </div>
-
-          {/* Add custom point */}
-          <div style={{display:"flex",gap:"8px"}}>
-            <input className="cr-input" value={newPoint} onChange={(e) => setNewPoint(e.target.value)}
-              placeholder="Add your own (e.g. Free Size)" style={{flex:1,margin:0}}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addPoint(); } }} />
-            <button className="cr-btn cr-btn-ghost" onClick={addPoint} disabled={!newPoint.trim()}>Add</button>
-          </div>
-          <p style={{fontSize:"11px",color:"#9CA3AF",margin:"6px 0 0"}}>Keep each point short — 2 to 5 words. No sentences.</p>
-        </div>
-
-        <StepNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={keyPoints.length === 0} />
-      </Card>}
-
-      {/* Step 3 — Style */}
-      {step === 3 && <Card>
-        <SectionTitle>Choose Infographic Style</SectionTitle>
-        <SectionDesc>Pick the visual theme for your product infographic.</SectionDesc>
-        <div className="cr-template-list">
-          {TEMPLATES.map((t) => (
-            <div key={t.id} className={`cr-template-row ${style===t.id?"selected":""}`} onClick={() => setStyle(t.id)}>
-              <div className="cr-template-dot" style={{background:t.id==="luxury"?"#B48C32":t.id==="modern"?"#2563EB":t.id==="minimal"?"#E5E7EB":t.id==="ecommerce"?"#059669":"#6366F1"}} />
-              <div style={{flex:1}}>
-                <p style={{fontWeight:600,fontSize:"13px",color:"#111827",margin:"0 0 2px"}}>{t.label}</p>
-                <p style={{fontSize:"12px",color:"#6B7280",margin:0}}>{t.desc}</p>
-              </div>
-              <div className={`cr-template-check ${style===t.id?"visible":""}`}>✓</div>
-            </div>
-          ))}
-        </div>
-        <StepNav onBack={() => setStep(2)} onNext={() => setStep(4)} nextDisabled={!style} />
-      </Card>}
-
-      {/* Step 4 — Review & Generate */}
-      {step === 4 && <Card>
-        <SectionTitle>Review & Generate</SectionTitle>
-        <SectionDesc>Confirm everything before generating your infographic.</SectionDesc>
-        <div style={{display:"flex",gap:"12px",marginBottom:"4px",alignItems:"flex-start",flexWrap:"wrap"}}>
-          <ReviewThumb label="Product" src={imageUrl} />
-          <div style={{flex:1,minWidth:"180px"}}>
-            <ReviewTable rows={[
-              ["Style", TEMPLATES.find(t=>t.id===style)?.label ?? style],
-              ["Key Points", `${keyPoints.length} highlights`],
-            ]} />
-            <div style={{display:"flex",flexWrap:"wrap",gap:"6px",marginTop:"10px"}}>
-              {keyPoints.map((pt, i) => (
-                <span key={i} style={{background:col.light,color:col.accent,fontWeight:700,fontSize:"11px",padding:"3px 10px",borderRadius:"999px"}}>{pt}</span>
-              ))}
-            </div>
-          </div>
-        </div>
-        <StepNav onBack={() => setStep(3)} onNext={() => { setStep(4); doGenerate(); }} nextLabel="Generate Infographic" isGenerate />
-      </Card>}
-    </div>
-  );
-}
-
 // ── Workflow Selector ─────────────────────────────────────────────────────────
 
 const WF_ICONS = {
@@ -1851,10 +1821,13 @@ function WorkflowSelector({ onSelect }) {
           const isHov = hovered === wf.id;
           return (
             <div key={wf.id} className="cr-wf-card"
+              role="button"
+              tabIndex={0}
               style={{ "--accent": col.accent, "--light": col.light, "--dark": col.dark }}
               onMouseEnter={() => setHovered(wf.id)}
               onMouseLeave={() => setHovered(null)}
-              onClick={() => onSelect(wf.id)}>
+              onClick={() => onSelect(wf.id)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(wf.id); } }}>
 
               {/* Image area */}
               <div className="cr-wf-img">
