@@ -57,6 +57,7 @@ const COLLECTIONS_QUERY = `#graphql
 const PRODUCT_VARIANTS_QUERY = `#graphql
   query GetProductVariants($id: ID!) {
     product(id: $id) {
+      descriptionHtml
       variants(first: 100) {
         edges {
           node {
@@ -185,7 +186,17 @@ export async function action({ request }) {
       ? JSON.parse(collectionProductsRaw)
       : null;
 
-    // Fetch variants for this product directly (kept out of page-load query to reduce cost)
+    // Product facts for RAG grounding (see docs/rag-qdrant-implementation-plan.md).
+    // vendor/product_type/tags are already known client-side from the collections
+    // loader query; description_html isn't loaded there (would bloat the bulk
+    // page-load query), so it's fetched here alongside variants instead.
+    const vendor = formData.get("vendor") || null;
+    const productType = formData.get("product_type") || null;
+    const tagsRaw = formData.get("tags");
+    const tags = tagsRaw ? JSON.parse(tagsRaw) : [];
+
+    // Fetch variants + description for this product directly (kept out of the
+    // page-load query to reduce cost)
     const varRes = await admin.graphql(PRODUCT_VARIANTS_QUERY, {
       variables: { id: shopifyProductGid },
     });
@@ -204,6 +215,7 @@ export async function action({ request }) {
         options: e.node.selectedOptions ?? [],
       }),
     );
+    const descriptionHtml = varData.data?.product?.descriptionHtml ?? null;
 
     const phpResult = await api.syncProduct({
       shopify_product_id: shopifyProductId,
@@ -215,6 +227,10 @@ export async function action({ request }) {
       collection_products: collectionProducts,
       shopify_variants: shopifyVariants,
       is_tryon_enabled: enabled ? 1 : 0,
+      vendor,
+      product_type: productType,
+      tags,
+      description_html: descriptionHtml,
     });
 
     if (!phpResult.ok) {
@@ -318,6 +334,12 @@ export async function action({ request }) {
             collection_products: collectionProducts,
             shopify_variants: null,
             is_tryon_enabled: enabled ? 1 : 0,
+            // vendor/product_type/tags only — description_html is skipped here to
+            // avoid an N+1 GraphQL call per product on a bulk collection toggle;
+            // it backfills the next time each product is toggled individually.
+            vendor: p.vendor || null,
+            product_type: p.productType || null,
+            tags: p.tags || [],
           }),
           admin.graphql(
             `#graphql
@@ -378,7 +400,7 @@ const CustomToggle = ({ checked, onChange, disabled }) => (
       width: "44px",
       height: "24px",
       borderRadius: "12px",
-      background: checked ? "var(--vto-primary)" : "#E2E8F0",
+      background: checked ? "var(--vto-primary)" : "var(--border-subtle)",
       position: "relative",
       cursor: disabled ? "not-allowed" : "pointer",
       transition: "background 0.3s ease",
@@ -410,8 +432,8 @@ const menuItemStyle = {
   border: "none",
   textAlign: "left",
   cursor: "pointer",
-  fontSize: "13px",
-  color: "#1E293B",
+  fontSize: "11px",
+  color: "var(--ink-900)",
   transition: "background 0.15s",
 };
 
@@ -453,9 +475,9 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
     right: 0,
     top: "calc(100% + 4px)",
     zIndex: 1000,
-    background: "white",
-    borderRadius: "8px",
-    boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+    background: "var(--surface-1)",
+    borderRadius: "var(--radius-sm)",
+    boxShadow: "var(--shadow-lg)",
   };
 
   if (confirmDelete) {
@@ -471,16 +493,16 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
       >
         <div
           style={{
-            fontSize: "13px",
+            fontSize: "12px",
             fontWeight: "600",
-            color: "#1E293B",
+            color: "var(--ink-900)",
             marginBottom: "4px",
           }}
         >
           Delete &ldquo;{collection.title}&rdquo;?
         </div>
         <div
-          style={{ fontSize: "12px", color: "#64748B", marginBottom: "12px" }}
+          style={{ fontSize: "11px", color: "var(--ink-500)", marginBottom: "12px" }}
         >
           Products will not be deleted.
         </div>
@@ -494,7 +516,7 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
               border: "1px solid var(--vto-border)",
               background: "white",
               cursor: "pointer",
-              fontSize: "13px",
+              fontSize: "11px",
             }}
           >
             Cancel
@@ -506,10 +528,10 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
               padding: "7px",
               borderRadius: "6px",
               border: "none",
-              background: "#EF4444",
+              background: "var(--danger-500)",
               color: "white",
               cursor: "pointer",
-              fontSize: "13px",
+              fontSize: "11px",
               fontWeight: "600",
             }}
           >
@@ -532,7 +554,7 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
     >
       <button
         style={menuItemStyle}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "#F8FAFC")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-2)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
         onClick={handleView}
       >
@@ -540,7 +562,7 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
       </button>
       <button
         style={menuItemStyle}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "#F8FAFC")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-2)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
         onClick={handleEdit}
       >
@@ -554,7 +576,7 @@ function CollectionDropdown({ collection, shop, submit, onClose }) {
         }}
       />
       <button
-        style={{ ...menuItemStyle, color: "#EF4444" }}
+        style={{ ...menuItemStyle, color: "var(--danger-500)" }}
         onMouseEnter={(e) => (e.currentTarget.style.background = "#FFF5F5")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
         onClick={() => setConfirmDelete(true)}
@@ -607,7 +629,14 @@ function CollectionRow({
     fd.set(
       "products_json",
       JSON.stringify(
-        collection.products.map((p) => ({ id: p.id, numericId: p.numericId, handle: p.handle })),
+        collection.products.map((p) => ({
+          id: p.id,
+          numericId: p.numericId,
+          handle: p.handle,
+          vendor: p.vendor,
+          productType: p.productType,
+          tags: p.tags,
+        })),
       ),
     );
     submit(fd, { method: "post" });
@@ -639,6 +668,9 @@ function CollectionRow({
     fd.set("collection_handle", collection.handle);
     fd.set("collection_products", updatedCollectionProducts);
     fd.set("enabled", String(newEnabled));
+    fd.set("vendor", product.vendor || "");
+    fd.set("product_type", product.productType || "");
+    fd.set("tags", JSON.stringify(product.tags || []));
     submit(fd, { method: "post" });
   }
 
@@ -654,7 +686,7 @@ function CollectionRow({
               style={{
                 width: "28px",
                 height: "28px",
-                background: expanded ? "var(--vto-primary-light)" : "#F8FAFC",
+                background: expanded ? "var(--vto-primary-light)" : "var(--surface-2)",
                 border: `1px solid ${expanded ? "var(--vto-primary)" : "var(--vto-border)"}`,
                 borderRadius: "6px",
                 cursor: "pointer",
@@ -662,7 +694,7 @@ function CollectionRow({
                 alignItems: "center",
                 justifyContent: "center",
                 flexShrink: 0,
-                color: expanded ? "var(--vto-primary)" : "#64748B",
+                color: expanded ? "var(--vto-primary)" : "var(--ink-500)",
                 transition: "all 0.2s",
               }}
             >
@@ -713,14 +745,14 @@ function CollectionRow({
               <div
                 style={{
                   fontWeight: "600",
-                  color: "#1E293B",
-                  fontSize: "14px",
+                  color: "var(--ink-900)",
+                  fontSize: "12px",
                 }}
               >
                 {collection.title}
               </div>
               <div
-                style={{ fontSize: "12px", color: "#94A3B8", marginTop: "2px" }}
+                style={{ fontSize: "12px", color: "var(--ink-300)", marginTop: "2px" }}
               >
                 /{collection.handle}
               </div>
@@ -731,12 +763,12 @@ function CollectionRow({
         {/* Product count */}
         <td>
           <span
-            style={{ fontWeight: "600", fontSize: "15px", color: "#1E293B" }}
+            style={{ fontWeight: "600", fontSize: "13px", color: "var(--ink-900)" }}
           >
             {collection.productCount}
           </span>
           <span
-            style={{ fontSize: "12px", color: "#64748B", marginLeft: "4px" }}
+            style={{ fontSize: "12px", color: "var(--ink-500)", marginLeft: "4px" }}
           >
             products
           </span>
@@ -747,14 +779,14 @@ function CollectionRow({
           <span
             style={{
               fontWeight: "600",
-              fontSize: "15px",
-              color: enabledCount > 0 ? "#10B981" : "#64748B",
+              fontSize: "13px",
+              color: enabledCount > 0 ? "var(--success-500)" : "var(--ink-500)",
             }}
           >
             {enabledCount}
           </span>
           <span
-            style={{ fontSize: "12px", color: "#64748B", marginLeft: "4px" }}
+            style={{ fontSize: "12px", color: "var(--ink-500)", marginLeft: "4px" }}
           >
             enabled
           </span>
@@ -779,14 +811,14 @@ function CollectionRow({
               style={{
                 width: "32px",
                 height: "32px",
-                background: isDropdownOpen ? "#F1F5F9" : "none",
+                background: isDropdownOpen ? "var(--surface-2)" : "none",
                 border: "1px solid var(--vto-border)",
                 borderRadius: "6px",
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "#64748B",
+                color: "var(--ink-500)",
               }}
             >
               <Icon source={MenuHorizontalIcon} />
@@ -810,7 +842,7 @@ function CollectionRow({
             <div
               style={{
                 borderTop: "2px solid var(--vto-primary-light)",
-                background: "#F8FAFC",
+                background: "var(--surface-2)",
               }}
             >
               {/* Header */}
@@ -875,7 +907,7 @@ function CollectionRow({
                   </span>
                 )}
                 {!isSubmitting && (
-                  <span style={{ fontSize: "11px", color: "#64748B" }}>
+                  <span style={{ fontSize: "11px", color: "var(--ink-500)" }}>
                     Toggle collection above to enable/disable all at once
                   </span>
                 )}
@@ -884,13 +916,13 @@ function CollectionRow({
               {/* Products table */}
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
-                  <tr style={{ background: "#F1F5F9" }}>
+                  <tr style={{ background: "var(--surface-2)" }}>
                     <th
                       style={{
                         padding: "8px 20px",
                         textAlign: "left",
                         fontSize: "11px",
-                        color: "#64748B",
+                        color: "var(--ink-500)",
                         fontWeight: "700",
                         textTransform: "uppercase",
                         letterSpacing: "0.04em",
@@ -903,7 +935,7 @@ function CollectionRow({
                         padding: "8px 16px",
                         textAlign: "left",
                         fontSize: "11px",
-                        color: "#64748B",
+                        color: "var(--ink-500)",
                         fontWeight: "700",
                         textTransform: "uppercase",
                         letterSpacing: "0.04em",
@@ -916,7 +948,7 @@ function CollectionRow({
                         padding: "8px 16px",
                         textAlign: "left",
                         fontSize: "11px",
-                        color: "#64748B",
+                        color: "var(--ink-500)",
                         fontWeight: "700",
                         textTransform: "uppercase",
                         letterSpacing: "0.04em",
@@ -929,7 +961,7 @@ function CollectionRow({
                         padding: "8px 16px",
                         textAlign: "left",
                         fontSize: "11px",
-                        color: "#64748B",
+                        color: "var(--ink-500)",
                         fontWeight: "700",
                         textTransform: "uppercase",
                         letterSpacing: "0.04em",
@@ -942,7 +974,7 @@ function CollectionRow({
                         padding: "8px 16px",
                         textAlign: "left",
                         fontSize: "11px",
-                        color: "#64748B",
+                        color: "var(--ink-500)",
                         fontWeight: "700",
                         textTransform: "uppercase",
                         letterSpacing: "0.04em",
@@ -958,7 +990,7 @@ function CollectionRow({
                       key={product.id}
                       style={{
                         borderTop: "1px solid var(--vto-border)",
-                        background: i % 2 === 0 ? "white" : "#FAFBFC",
+                        background: i % 2 === 0 ? "white" : "var(--surface-2)",
                       }}
                     >
                       {/* Product */}
@@ -991,11 +1023,11 @@ function CollectionRow({
                                 width: "44px",
                                 height: "44px",
                                 borderRadius: "6px",
-                                background: "#E2E8F0",
+                                background: "var(--border-subtle)",
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "center",
-                                color: "#94A3B8",
+                                color: "var(--ink-300)",
                                 flexShrink: 0,
                               }}
                             >
@@ -1006,16 +1038,16 @@ function CollectionRow({
                             <div
                               style={{
                                 fontWeight: "600",
-                                fontSize: "13px",
-                                color: "#1E293B",
+                                fontSize: "12px",
+                                color: "var(--ink-900)",
                               }}
                             >
                               {product.title}
                             </div>
                             <div
                               style={{
-                                fontSize: "11px",
-                                color: "#94A3B8",
+                                fontSize: "10px",
+                                color: "var(--ink-300)",
                                 marginTop: "2px",
                               }}
                             >
@@ -1037,8 +1069,8 @@ function CollectionRow({
                                       fontSize: "10px",
                                       padding: "1px 6px",
                                       borderRadius: "4px",
-                                      background: "#F1F5F9",
-                                      color: "#64748B",
+                                      background: "var(--surface-2)",
+                                      color: "var(--ink-500)",
                                       fontWeight: "500",
                                     }}
                                   >
@@ -1049,7 +1081,7 @@ function CollectionRow({
                                   <span
                                     style={{
                                       fontSize: "10px",
-                                      color: "#94A3B8",
+                                      color: "var(--ink-300)",
                                     }}
                                   >
                                     +{product.tags.length - 3}
@@ -1065,9 +1097,9 @@ function CollectionRow({
                         {product.vendor ? (
                           <div
                             style={{
-                              fontSize: "13px",
+                              fontSize: "12px",
                               fontWeight: "500",
-                              color: "#1E293B",
+                              color: "var(--ink-900)",
                             }}
                           >
                             {product.vendor}
@@ -1076,8 +1108,8 @@ function CollectionRow({
                         {product.productType ? (
                           <div
                             style={{
-                              fontSize: "11px",
-                              color: "#64748B",
+                              fontSize: "10px",
+                              color: "var(--ink-500)",
                               marginTop: product.vendor ? "2px" : 0,
                             }}
                           >
@@ -1085,7 +1117,7 @@ function CollectionRow({
                           </div>
                         ) : null}
                         {!product.vendor && !product.productType && (
-                          <span style={{ fontSize: "13px", color: "#CBD5E1" }}>
+                          <span style={{ fontSize: "12px", color: "var(--border-strong)" }}>
                             —
                           </span>
                         )}
@@ -1107,8 +1139,8 @@ function CollectionRow({
                             borderRadius: "6px",
                             border: "1px solid var(--vto-border)",
                             background: "white",
-                            color: "#3B5BDB",
-                            fontSize: "13px",
+                            color: "var(--accent-500)",
+                            fontSize: "12px",
                             fontWeight: "600",
                             cursor: "pointer",
                             transition: "all 0.15s",
@@ -1161,10 +1193,10 @@ function CollectionRow({
                           />
                           <span
                             style={{
-                              fontSize: "12px",
+                              fontSize: "11px",
                               color: product.isTryonEnabled
-                                ? "#10B981"
-                                : "#94A3B8",
+                                ? "var(--success-500)"
+                                : "var(--ink-300)",
                               fontWeight: "600",
                             }}
                           >
@@ -1229,7 +1261,7 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
         style={{
           position: "relative",
           aspectRatio: "1/1",
-          background: "#F1F5F9",
+          background: "var(--surface-2)",
         }}
       >
         {product.featuredImage ? (
@@ -1246,7 +1278,7 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "#CBD5E1",
+              color: "var(--border-strong)",
             }}
           >
             <Icon source={ProductIcon} size="large" />
@@ -1263,7 +1295,7 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
         >
           <div
             style={{
-              background: "#10B981",
+              background: "var(--success-500)",
               color: "white",
               fontSize: "10px",
               fontWeight: "700",
@@ -1289,8 +1321,8 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
         <div
           style={{
             fontWeight: "600",
-            fontSize: "14px",
-            color: "#1E293B",
+            fontSize: "13px",
+            color: "var(--ink-900)",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -1298,7 +1330,7 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
         >
           {product.title}
         </div>
-        <div style={{ fontSize: "12px", color: "#64748B" }}>
+        <div style={{ fontSize: "12px", color: "var(--ink-500)" }}>
           {product.vendor || "No Vendor"} • {product.productType || "Standard"}
         </div>
         <div
@@ -1306,7 +1338,7 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
             marginTop: "8px",
             fontWeight: "700",
             color: "var(--vto-primary)",
-            fontSize: "15px",
+            fontSize: "13px",
           }}
         >
           {product.price} {product.currency}
@@ -1354,8 +1386,8 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
               justifyContent: "center",
               borderRadius: "6px",
               border: "1px solid #FCA5A5",
-              background: "#FEF2F2",
-              color: "#EF4444",
+              background: "var(--danger-50)",
+              color: "var(--danger-500)",
               cursor: "pointer",
               transition: "all 0.2s",
               marginLeft: "auto",
@@ -1394,7 +1426,7 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
             backdropFilter: "blur(2px)",
           }}
         >
-          <div style={{ color: "#EF4444", marginBottom: "12px" }}>
+          <div style={{ color: "var(--danger-500)", marginBottom: "12px" }}>
             <svg
               width="32"
               height="32"
@@ -1411,7 +1443,7 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
           <Text variant="bodyMd" fontWeight="bold">
             Delete Try-On?
           </Text>
-          <p style={{ fontSize: "13px", color: "#64748B", marginTop: "4px" }}>
+          <p style={{ fontSize: "11px", color: "var(--ink-500)", marginTop: "4px" }}>
             This will disable the try-on button for this product.
           </p>
           <div
@@ -1431,7 +1463,7 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
                 border: "1px solid var(--vto-border)",
                 background: "white",
                 cursor: "pointer",
-                fontSize: "13px",
+                fontSize: "11px",
                 fontWeight: "600",
               }}
             >
@@ -1444,10 +1476,10 @@ function EnabledProductCard({ product, shop, submit, isSubmitting, navigate }) {
                 padding: "8px",
                 borderRadius: "6px",
                 border: "none",
-                background: "#EF4444",
+                background: "var(--danger-500)",
                 color: "white",
                 cursor: "pointer",
-                fontSize: "13px",
+                fontSize: "11px",
                 fontWeight: "600",
               }}
             >
@@ -1529,7 +1561,7 @@ export default function Products() {
             <div className="vto-kpi-label">Live Collections</div>
             <div
               className="vto-kpi-value"
-              style={{ fontSize: "24px", color: "#1E293B" }}
+              style={{ color: "var(--ink-900)" }}
             >
               {stats.totalCollections}
             </div>
@@ -1547,7 +1579,7 @@ export default function Products() {
             <div className="vto-kpi-label">Try-On Enabled</div>
             <div
               className="vto-kpi-value"
-              style={{ fontSize: "24px", color: "#1E293B" }}
+              style={{ color: "var(--ink-900)" }}
             >
               {stats.tryonEnabledCount}
             </div>
@@ -1565,7 +1597,7 @@ export default function Products() {
             <div className="vto-kpi-label">Active Products</div>
             <div
               className="vto-kpi-value"
-              style={{ fontSize: "24px", color: "#1E293B" }}
+              style={{ color: "var(--ink-900)" }}
             >
               {stats.totalProducts}
             </div>
@@ -1587,16 +1619,16 @@ export default function Products() {
           <div>
             <h2
               style={{
-                fontSize: "16px",
+                fontSize: "12px",
                 fontWeight: "700",
-                color: "#1E293B",
+                color: "var(--ink-900)",
                 margin: 0,
               }}
             >
               Live Collections
             </h2>
             <p
-              style={{ fontSize: "13px", color: "#64748B", margin: "3px 0 0" }}
+              style={{ fontSize: "11px", color: "var(--ink-500)", margin: "3px 0 0" }}
             >
               {filtered.length} published collection
               {filtered.length !== 1 ? "s" : ""} with active products
@@ -1618,19 +1650,19 @@ export default function Products() {
 
         {filtered.length === 0 ? (
           <div style={{ padding: "60px 24px", textAlign: "center" }}>
-            <div style={{ color: "#CBD5E1", marginBottom: "12px" }}>
+            <div style={{ color: "var(--border-strong)", marginBottom: "12px" }}>
               <Icon source={ProductIcon} />
             </div>
             <div
               style={{
                 fontWeight: "600",
-                color: "#1E293B",
+                color: "var(--ink-900)",
                 marginBottom: "4px",
               }}
             >
               No collections found
             </div>
-            <div style={{ fontSize: "13px", color: "#64748B" }}>
+            <div style={{ fontSize: "11px", color: "var(--ink-500)" }}>
               {searchQuery
                 ? `No collections match "${searchQuery}".`
                 : "No published collections with active products were found in your store."}
@@ -1714,15 +1746,15 @@ export default function Products() {
           <div>
             <h2
               style={{
-                fontSize: "20px",
+                fontSize: "12px",
                 fontWeight: "700",
-                color: "#1E293B",
+                color: "var(--ink-900)",
                 margin: 0,
               }}
             >
               Try-On Enabled Products
             </h2>
-            <p style={{ fontSize: "14px", color: "#64748B", marginTop: "4px" }}>
+            <p style={{ fontSize: "12px", color: "var(--ink-500)", marginTop: "4px" }}>
               Quickly manage products with virtual try-on active
             </p>
           </div>
@@ -1745,11 +1777,11 @@ export default function Products() {
             className="vto-card"
             style={{ padding: "80px 24px", textAlign: "center" }}
           >
-            <div style={{ color: "#CBD5E1", marginBottom: "16px" }}>
+            <div style={{ color: "var(--border-strong)", marginBottom: "16px" }}>
               <Icon source={CheckCircleIcon} size="large" />
             </div>
             <Text variant="headingMd">No enabled products found</Text>
-            <p style={{ fontSize: "14px", color: "#64748B", marginTop: "8px" }}>
+            <p style={{ fontSize: "12px", color: "var(--ink-500)", marginTop: "8px" }}>
               {enabledSearchQuery
                 ? `No active products match "${enabledSearchQuery}"`
                 : "Enable try-on for products in the collections table above to see them here."}

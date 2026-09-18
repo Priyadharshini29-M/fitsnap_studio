@@ -99,12 +99,15 @@ export const action = async ({ request }) => {
     const data = await phpRes.json().catch(() => ({}));
     if (!phpRes.ok || !data.tempUrl) {
       console.error("PHP upload-temp failed:", phpRes.status, data);
-      return Response.json({ error: "Upload failed" }, { status: 500 });
+      return Response.json(
+        { error: data.error || `Upload failed (HTTP ${phpRes.status})` },
+        { status: 500 }
+      );
     }
     return Response.json({ tempUrl: data.tempUrl });
   } catch (err) {
     console.error("PHP upload failed:", err);
-    return Response.json({ error: "Upload failed" }, { status: 500 });
+    return Response.json({ error: `Upload failed: ${err.message || err}` }, { status: 500 });
   }
 };
 

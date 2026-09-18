@@ -264,7 +264,7 @@ const FitCard = ({ title, price, views, trend, image, badge }) => (
         <Text variant="bodyXs" tone="subdued">
           👁 {views}
         </Text>
-        <div style={{ color: "#000000", fontSize: "11px", fontWeight: "700" }}>
+        <div style={{ color: "#000000", fontSize: "10px", fontWeight: "700" }}>
           ↑ {trend}%
         </div>
       </div>
@@ -513,7 +513,7 @@ export default function Index() {
               <div
                 style={{
                   height: "6px",
-                  background: "#F1F5F9",
+                  background: "var(--surface-2)",
                   borderRadius: "3px",
                   overflow: "hidden",
                 }}
@@ -522,7 +522,7 @@ export default function Index() {
                   style={{
                     width: "66%",
                     height: "100%",
-                    background: "#000000",
+                    background: "var(--accent-500)",
                     borderRadius: "3px",
                   }}
                 />
@@ -530,7 +530,7 @@ export default function Index() {
 
               <Text
                 variant="bodyMd"
-                style={{ color: "#111827", lineHeight: 1.6 }}
+                style={{ color: "var(--ink-900)", lineHeight: 1.6 }}
               >
                 Your integration is almost complete. One final launch step
                 remains before virtual try-ons are fully enabled across your
@@ -546,13 +546,13 @@ export default function Index() {
                 ].map((item, i) => (
                   <InlineStack key={i} gap="150" blockAlign="center">
                     <div
-                      style={{ color: item.completed ? "#000000" : "#CBD5E1" }}
+                      style={{ color: item.completed ? "var(--accent-500)" : "var(--border-strong)" }}
                     >
                       <Icon source={CheckCircleIcon} size="small" />
                     </div>
                     <Text
                       variant="bodySm"
-                      style={{ color: item.completed ? "#111827" : "#475569" }}
+                      style={{ color: item.completed ? "var(--ink-900)" : "var(--ink-500)" }}
                     >
                       {item.label}
                     </Text>
@@ -583,11 +583,11 @@ export default function Index() {
                 </Text>
                 <div
                   style={{
-                    background: appEnabled ? "#000000" : "#F3F4F6",
-                    color: appEnabled ? "#FFFFFF" : "#6B7280",
+                    background: appEnabled ? "var(--success-50)" : "var(--surface-2)",
+                    color: appEnabled ? "var(--success-500)" : "var(--ink-500)",
                     padding: "2px 10px",
-                    borderRadius: "12px",
-                    fontSize: "11px",
+                    borderRadius: "var(--radius-pill)",
+                    fontSize: "10px",
                     fontWeight: "700",
                   }}
                 >
@@ -597,7 +597,7 @@ export default function Index() {
 
               <Text
                 variant="bodyMd"
-                style={{ color: "#111827", lineHeight: 1.6 }}
+                style={{ color: "var(--ink-900)", lineHeight: 1.6 }}
               >
                 The widget is active in your store. Manage availability from the
                 app or the theme editor without losing saved settings.
@@ -610,11 +610,11 @@ export default function Index() {
                   disabled={isSaving}
                   style={{
                     padding: "8px",
-                    fontSize: "13px",
-                    background: "#000000",
+                    fontSize: "11px",
+                    background: "var(--ink-900)",
                     color: "#FFFFFF",
                     border: "none",
-                    borderRadius: "8px",
+                    borderRadius: "var(--radius-sm)",
                     cursor: "pointer",
                   }}
                 >
@@ -630,11 +630,11 @@ export default function Index() {
                   }
                   style={{
                     padding: "8px",
-                    fontSize: "13px",
+                    fontSize: "11px",
                     marginTop: "8px",
                     width: "100%",
-                    border: "1px solid #E5E7EB",
-                    borderRadius: "8px",
+                    border: "1px solid var(--vto-border)",
+                    borderRadius: "var(--radius-sm)",
                     background: "transparent",
                     cursor: "pointer",
                   }}
@@ -666,11 +666,11 @@ export default function Index() {
                 </Text>
                 <div
                   style={{
-                    background: "#F3F4F6",
-                    color: "#000000",
+                    background: "var(--accent-50)",
+                    color: "var(--accent-600)",
                     padding: "2px 10px",
-                    borderRadius: "12px",
-                    fontSize: "11px",
+                    borderRadius: "var(--radius-pill)",
+                    fontSize: "10px",
                     fontWeight: "700",
                   }}
                 >
@@ -681,10 +681,10 @@ export default function Index() {
               {/* Price + CTA */}
               <div
                 style={{
-                  background: "#F9FAFB",
+                  background: "var(--surface-2)",
                   padding: "12px 16px",
-                  borderRadius: "12px",
-                  border: "1px solid #E5E7EB",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--vto-border)",
                 }}
               >
                 <InlineStack align="space-between" blockAlign="center">
@@ -693,9 +693,9 @@ export default function Index() {
                     {currentPlanRow?.price_inr_monthly > 0 && (
                       <span
                         style={{
-                          fontSize: "12px",
+                          fontSize: "11px",
                           fontWeight: "500",
-                          color: "#6B7280",
+                          color: "var(--ink-500)",
                         }}
                       >
                         /mo
@@ -716,18 +716,18 @@ export default function Index() {
               {(() => {
                 const used = plan?.used ?? 0;
                 const pct = planLimit > 0 ? Math.min(100, Math.round((used / planLimit) * 100)) : 0;
-                const barColor = pct >= 90 ? "#EF4444" : pct >= 70 ? "#F59E0B" : "#1D9E75";
+                const barColor = pct >= 90 ? "var(--danger-500)" : pct >= 70 ? "var(--warning-500)" : "var(--success-500)";
                 return (
                   <div>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
-                      <span style={{ fontSize: "12px", fontWeight: 600, color: "#374151" }}>Monthly Try-Ons</span>
-                      <span style={{ fontSize: "12px", color: "#6B7280" }}>{used} / {planLimit} used</span>
+                      <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--ink-700)" }}>Monthly Try-Ons</span>
+                      <span style={{ fontSize: "11px", color: "var(--ink-500)" }}>{used} / {planLimit} used</span>
                     </div>
-                    <div style={{ height: "6px", background: "#F3F4F6", borderRadius: "999px", overflow: "hidden" }}>
+                    <div style={{ height: "6px", background: "var(--surface-2)", borderRadius: "999px", overflow: "hidden" }}>
                       <div style={{ height: "100%", width: `${pct}%`, background: barColor, borderRadius: "999px", transition: "width 0.4s ease" }} />
                     </div>
                     {pct >= 90 && (
-                      <p style={{ fontSize: "11px", color: "#EF4444", marginTop: "5px", fontWeight: 500 }}>
+                      <p style={{ fontSize: "10px", color: "var(--danger-500)", marginTop: "5px", fontWeight: 500 }}>
                         {pct}% of quota used — extra try-ons are charged per use.
                       </p>
                     )}
@@ -739,7 +739,7 @@ export default function Index() {
               <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                 {(PLAN_FEATURES[effectivePlan] ?? PLAN_FEATURES.free).map((f, i) => (
                   <li key={i} style={{ display: "flex", gap: "8px", alignItems: "flex-start", marginBottom: "5px" }}>
-                    <span style={{ color: "#1D9E75", fontWeight: 700, flexShrink: 0, fontSize: "13px" }}>✓</span>
+                    <span style={{ color: "var(--success-500)", fontWeight: 700, flexShrink: 0, fontSize: "11px" }}>✓</span>
                     <Text variant="bodySm">{f}</Text>
                   </li>
                 ))}
@@ -754,14 +754,13 @@ export default function Index() {
             <Text
               variant="headingLg"
               fontWeight="bold"
-              style={{ fontSize: "1.2rem" }}
             >
               Master the Art of Virtual Fitting
             </Text>
             <Text
               variant="bodyMd"
               style={{
-                color: "#6B7280",
+                color: "var(--ink-500)",
                 lineHeight: 1.6,
                 marginTop: "6px",
               }}
@@ -816,10 +815,10 @@ export default function Index() {
                     <div className="vto-slider-content">
                       <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
                         <span style={{
-                          fontSize: "11px",
+                          fontSize: "10px",
                           fontWeight: 700,
                           color: "#fff",
-                          background: "#111827",
+                          background: "var(--ink-900)",
                           borderRadius: "6px",
                           padding: "2px 8px",
                           letterSpacing: "0.04em",
@@ -843,11 +842,12 @@ export default function Index() {
           <div
             className="vto-card"
             style={{
-              background: "#111827",
+              background: "var(--ink-900)",
               padding: "24px",
-              borderRadius: "16px",
+              borderRadius: "var(--radius-lg)",
               cursor: "pointer",
               border: "none",
+              boxShadow: "var(--shadow-lg)",
             }}
             role="button"
             tabIndex={0}

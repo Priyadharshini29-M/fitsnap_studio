@@ -383,10 +383,10 @@ function FeatureCheck() {
       aria-hidden="true"
       style={{ flexShrink: 0, marginTop: "1px" }}
     >
-      <circle cx="8" cy="8" r="8" fill="#EAF3DE" />
+      <circle cx="8" cy="8" r="8" fill="var(--success-50)" />
       <path
         d="M5 8l2 2 4-4"
-        stroke="#1D9E75"
+        stroke="var(--success-500)"
         strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -461,7 +461,7 @@ function PlanCard({ config, isCurrent, currentPlanKey, isSubmitting }) {
           <p className="vto-plan-price">{config.price}</p>
           {config.priceSub && (
             <span
-              style={{ fontSize: "13px", color: "#6B7280", fontWeight: 400 }}
+              style={{ fontSize: "11px", color: "#6B7280", fontWeight: 400 }}
             >
               {config.priceSub}
             </span>
@@ -470,7 +470,7 @@ function PlanCard({ config, isCurrent, currentPlanKey, isSubmitting }) {
         {config.extraRate && (
           <p
             style={{
-              fontSize: "11px",
+              fontSize: "10px",
               color: "#9CA3AF",
               marginTop: "4px",
               fontWeight: 500,
@@ -583,7 +583,7 @@ export default function Plans() {
       >
         <div style={{ textAlign: "center", padding: "80px 20px" }}>
           <p
-            style={{ fontSize: "15px", color: "#6B7280", marginBottom: "20px" }}
+            style={{ fontSize: "12px", color: "#6B7280", marginBottom: "20px" }}
           >
             Redirecting to Shopify billing…
           </p>
@@ -593,13 +593,13 @@ export default function Plans() {
             rel="noreferrer"
             style={{
               display: "inline-block",
-              background: "#1D9E75",
+              background: "var(--success-500)",
               color: "#fff",
               padding: "14px 32px",
               borderRadius: "8px",
               textDecoration: "none",
               fontWeight: 600,
-              fontSize: "15px",
+              fontSize: "12px",
             }}
           >
             Click here if not redirected automatically →
@@ -616,21 +616,7 @@ export default function Plans() {
       <div className="vto-plan-page">
         {/* Plan upgrade success banner */}
         {planUpgraded && (
-          <div
-            style={{
-              background: "#D1FAE5",
-              border: "1px solid #6EE7B7",
-              borderRadius: "8px",
-              padding: "14px 18px",
-              marginBottom: "24px",
-              fontSize: "14px",
-              color: "#065F46",
-              fontWeight: 500,
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-            }}
-          >
+          <div className="vto-banner vto-banner-success" style={{ marginBottom: "24px", fontWeight: 500 }}>
             <span style={{ fontSize: "20px" }}>✅</span>
             <span>
               Your plan has been upgraded to{" "}
@@ -644,34 +630,14 @@ export default function Plans() {
 
         {/* Action error banner */}
         {actionData?.error && (
-          <div
-            style={{
-              background: "#FEE2E2",
-              border: "1px solid #EF4444",
-              borderRadius: "8px",
-              padding: "12px 16px",
-              marginBottom: "24px",
-              fontSize: "14px",
-              color: "#991B1B",
-            }}
-          >
+          <div className="vto-banner vto-banner-critical" style={{ marginBottom: "24px" }}>
             ⚠ {actionData.error}
           </div>
         )}
 
         {/* Billing declined notice */}
         {billingDeclined && (
-          <div
-            style={{
-              background: "#FFF3CD",
-              border: "1px solid #F59E0B",
-              borderRadius: "8px",
-              padding: "12px 16px",
-              marginBottom: "24px",
-              fontSize: "14px",
-              color: "#92400E",
-            }}
-          >
+          <div className="vto-banner vto-banner-warning" style={{ marginBottom: "24px" }}>
             The subscription request was declined. You can upgrade again
             whenever you&apos;re ready.
           </div>
@@ -735,7 +701,7 @@ export function ErrorBoundary() {
           borderRadius: "8px",
           whiteSpace: "pre-wrap",
           wordBreak: "break-all",
-          fontSize: "13px",
+          fontSize: "11px",
           color: "#7f1d1d",
           marginBottom: "12px",
         }}
@@ -745,7 +711,7 @@ export function ErrorBoundary() {
       {stack && (
         <details>
           <summary
-            style={{ cursor: "pointer", fontSize: "13px", color: "#6b7280" }}
+            style={{ cursor: "pointer", fontSize: "11px", color: "#6b7280" }}
           >
             Stack trace
           </summary>

@@ -1,5 +1,5 @@
 import { redirect, Form, useLoaderData } from "react-router";
-import { login } from "../../shopify.server";
+import { login, authenticate } from "../../shopify.server";
 import styles from "./styles.module.css";
 
 export const loader = async ({ request }) => {
@@ -13,6 +13,17 @@ export const loader = async ({ request }) => {
     url.searchParams.get("id_token")
   ) {
     throw redirect(`/app?${url.searchParams.toString()}`);
+  }
+
+  // Shopify Admin's own "back to app home" navigation reaches "/" via a
+  // client-side route change that carries none of the params above, even
+  // though the embedded session is still live. Fall back to checking for
+  // that session before treating this as a genuine public/logged-out visit.
+  try {
+    await authenticate.admin(request);
+    throw redirect("/app");
+  } catch (err) {
+    if (err instanceof Response) throw err;
   }
 
   return { showForm: Boolean(login) };

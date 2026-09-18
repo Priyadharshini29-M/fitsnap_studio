@@ -124,6 +124,9 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
       return request('GET', `/analytics${qs ? '?' + qs : ''}`);
     },
 
+    getLeads: (limit = 100) =>
+      request('GET', `/leads?limit=${limit}`),
+
     getPlans: () =>
       request('GET', '/plans'),
 
@@ -179,19 +182,30 @@ export default function phpApiClient(apiKey, baseUrl, shopDomain = null) {
     studioDeleteModelImage: (modelKey) =>
       request('DELETE', '/studio/model-image', { model_key: modelKey }),
 
-    // ── Infographic (OpenAI key-point extraction + OpenAI image generation) ──
-    // 200s — high-quality gpt-image-1 generation at portrait size can take
-    // well over a minute; give it real headroom past the PHP-side timeout
-    // (200s there too — the 'collage' style makes 4 such calls concurrently).
+    // ── RAG knowledge index (grounds infographic generation) ─────────────────
+
+    ragReindex: () =>
+      request('POST', '/rag/reindex', {}, 60_000),
+
+    ragStatus: () =>
+      request('GET', '/rag/status'),
+
+    // ── Infographic (OpenAI vision classification + OpenAI image generation) ──
+    // Synchronous — create()/generate()/edit() run the full pipeline
+    // (classification, extraction, scene/layout planning, compose, QC)
+    // inline and respond with the finished result in one request. A single
+    // gpt-image-1 compose call alone can measure 100-115s, and the bounded
+    // QC auto-retry can add a second one — give this real headroom, matching
+    // InfographicController.php's own @set_time_limit(200).
 
     infographicCreate: (data) =>
-      request('POST', '/infographic/create', data, 200_000),
+      request('POST', '/infographic/create', data, 210_000),
 
     infographicExtractPoints: (data) =>
       request('POST', '/infographic/extract-points', data, 30_000),
 
     infographicGenerate: (data) =>
-      request('POST', '/infographic/generate', data, 200_000),
+      request('POST', '/infographic/generate', data, 210_000),
 
     infographicEdit: (data) =>
       request('POST', '/infographic/edit', data, 170_000),

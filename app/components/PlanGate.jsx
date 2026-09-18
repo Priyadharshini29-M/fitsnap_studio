@@ -3,9 +3,9 @@ import { planAtLeast, PLAN_LABELS, PLAN_PRICES } from "../lib/plans";
 
 function LockIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="5" y="11" width="14" height="10" rx="2" stroke="#6B7280" strokeWidth="1.5" />
-      <path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="#6B7280" strokeWidth="1.5" strokeLinecap="round" />
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="5" y="11" width="14" height="10" rx="3" stroke="var(--accent-500, #4F46E5)" strokeWidth="1.6" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="var(--accent-500, #4F46E5)" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -17,13 +17,13 @@ function UpgradeCard({ label, price, featureName }) {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: "16px",
+        gap: "18px",
         padding: "40px 32px",
         textAlign: "center",
-        background: "#fff",
-        borderRadius: "16px",
-        border: "1px solid #E5E7EB",
-        boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+        background: "var(--surface-1, #fff)",
+        borderRadius: "var(--radius-lg, 16px)",
+        border: "1px solid var(--border-subtle, #E8E8EC)",
+        boxShadow: "var(--shadow-md, 0 4px 12px rgba(15,23,42,0.06))",
         maxWidth: "420px",
         margin: "0 auto",
         width: "100%",
@@ -33,8 +33,8 @@ function UpgradeCard({ label, price, featureName }) {
         style={{
           width: "56px",
           height: "56px",
-          borderRadius: "14px",
-          background: "#F3F4F6",
+          borderRadius: "var(--radius-md, 12px)",
+          background: "var(--accent-50, #EEF0FD)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -43,10 +43,10 @@ function UpgradeCard({ label, price, featureName }) {
         <LockIcon />
       </div>
       <div>
-        <p style={{ fontSize: "16px", fontWeight: 700, color: "#111827", margin: 0 }}>
+        <p style={{ fontSize: "13px", fontWeight: 700, color: "var(--ink-900, #0B0F19)", margin: 0, letterSpacing: "-0.01em" }}>
           {featureName ?? "This feature"} requires the {label} plan
         </p>
-        <p style={{ fontSize: "13px", color: "#6B7280", marginTop: "6px", lineHeight: 1.5 }}>
+        <p style={{ fontSize: "11px", color: "var(--ink-500, #6B7280)", marginTop: "6px", lineHeight: 1.55 }}>
           Upgrade to {label} ({price}) to unlock this feature and more.
         </p>
       </div>
@@ -55,13 +55,14 @@ function UpgradeCard({ label, price, featureName }) {
         style={{
           display: "inline-block",
           padding: "10px 28px",
-          background: "#111827",
+          background: "var(--accent-500, #4F46E5)",
           color: "#fff",
-          borderRadius: "8px",
+          borderRadius: "var(--radius-sm, 8px)",
           textDecoration: "none",
-          fontSize: "14px",
+          fontSize: "12px",
           fontWeight: 600,
           letterSpacing: "0.01em",
+          transition: "background 0.15s ease",
         }}
       >
         View Plans

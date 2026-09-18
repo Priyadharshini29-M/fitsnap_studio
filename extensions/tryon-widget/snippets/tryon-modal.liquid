@@ -360,6 +360,61 @@
             </span>
           </div>
 
+          <!-- Flip card: front = lead-capture form, back = purchase controls.
+               Flips once the shopper submits their details. The result image
+               (left) is never gated — only the purchase panel. See
+               tryon-widget.js's _applyLeadGate/_submitLead + LEAD_CAPTURED_KEY. -->
+          <div id="tryfit-flip-card" class="tryfit-flip-card">
+            <div id="tryfit-flip-card-inner" class="tryfit-flip-card-inner">
+
+              <!-- FRONT: lead-capture form -->
+              <div class="tryfit-flip-face tryfit-flip-front">
+                <div class="tryfit-lead-form">
+                  <p class="tryfit-lead-gate-title">Unlock Size &amp; Buy</p>
+                  <p class="tryfit-lead-gate-sub">Enter your details to continue</p>
+
+                  <input
+                    type="email"
+                    id="tryfit-lead-email"
+                    class="tryfit-lead-input"
+                    placeholder="Email address"
+                    autocomplete="email"
+                    inputmode="email"
+                  >
+                  <input
+                    type="tel"
+                    id="tryfit-lead-phone"
+                    class="tryfit-lead-input"
+                    placeholder="Phone number"
+                    autocomplete="tel"
+                    inputmode="tel"
+                  >
+
+                  <label class="tryfit-lead-consent">
+                    <input type="checkbox" id="tryfit-lead-consent">
+                    <span>
+                      I agree to the
+                      <a href="/policies/privacy-policy" target="_blank" rel="noopener">Privacy Policy</a>
+                      and
+                      <a href="/policies/terms-of-service" target="_blank" rel="noopener">Terms of Service</a>
+                    </span>
+                  </label>
+
+                  <div id="tryfit-lead-error" class="tryfit-lead-error" style="display:none;"></div>
+
+                  <button
+                    type="button"
+                    id="tryfit-lead-submit"
+                    class="tryfit-btn tryfit-btn--primary tryfit-btn--full"
+                    data-tryfit-action="lead-submit"
+                  >
+                    Unlock My Look
+                  </button>
+                </div>
+              </div>
+
+              <!-- BACK: purchase controls -->
+              <div class="tryfit-flip-face tryfit-flip-back">
           <!-- Padded content wrapper -->
           <div class="tryfit-result-content">
 
@@ -485,6 +540,10 @@
 
 
           </div><!-- /.tryfit-result-content -->
+              </div><!-- /.tryfit-flip-back -->
+
+            </div><!-- /.tryfit-flip-card-inner -->
+          </div><!-- /.tryfit-flip-card -->
 
         </div><!-- /.tryfit-result-panel -->
 

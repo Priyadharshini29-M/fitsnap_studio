@@ -1,36 +1,39 @@
 :root {
-  --vto-bg: #F8FAFC;
-  --vto-primary: #000000;
-  --vto-primary-hover: #1F2937;
-  --vto-primary-light: rgba(0, 0, 0, 0.05);
-  --vto-text-main: #000000;
-  --vto-text-sub: #6B7280;
-  --vto-card-bg: #FFFFFF;
-  --vto-border: #E5E7EB;
-  --vto-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
-  --vto-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.03), 0 4px 6px -4px rgba(0, 0, 0, 0.03);
-  
+  /* Aliased onto app/design-tokens.css — kept under their original names so
+     every existing var(--vto-*) / var(--font-*) reference across the app
+     keeps working unchanged while resolving to the shared, unified palette. */
+  --vto-bg: var(--surface-0);
+  --vto-primary: var(--accent-500);
+  --vto-primary-hover: var(--accent-600);
+  --vto-primary-light: var(--accent-50);
+  --vto-text-main: var(--ink-900);
+  --vto-text-sub: var(--ink-500);
+  --vto-card-bg: var(--surface-1);
+  --vto-border: var(--border-subtle);
+  --vto-shadow: var(--shadow-sm);
+  --vto-shadow-lg: var(--shadow-lg);
+
   /* Font Size Standards - Global Consistency */
-  --font-xs: 0.75rem; /* 12px */
-  --font-sm: 0.875rem; /* 14px */
-  --font-base: 1rem; /* 16px */
-  --font-md: 1.125rem; /* 18px */
-  --font-lg: 1.25rem; /* 20px */
-  --font-xl: 1.5rem; /* 24px */
-  --font-2xl: 1.875rem; /* 30px */
+  --font-xs: var(--text-2xs);  /* 10px */
+  --font-sm: var(--text-xs);   /* 11px */
+  --font-base: var(--text-sm); /* 12px */
+  --font-md: var(--text-md);   /* 14px */
+  --font-lg: var(--text-lg);   /* 16px */
+  --font-xl: var(--text-xl);   /* 18px */
+  --font-2xl: var(--text-2xl); /* 22px */
 }
 
-/* 
+/*
   FONT SIZE STANDARDIZATION GUIDE
   ═════════════════════════════════════════════════════════════════
   All text elements across the app should follow this hierarchy:
-  
-  Page Titles (h1):      var(--font-xl) / 24px / headingLg
-  Section Headings (h2): var(--font-lg) / 20px / headingMd
-  Subsection (h3):       var(--font-md) / 18px / headingMd
-  Body Text (p/span):    var(--font-base) / 16px / bodyMd
-  Small Text:            var(--font-sm) / 14px / bodySm
-  Extra Small:           var(--font-xs) / 12px / bodyXs
+
+  Page Titles (h1):      var(--font-xl) / 18px / headingLg
+  Section Headings (h2): var(--font-lg) / 16px / headingMd
+  Subsection (h3):       var(--font-md) / 14px / headingMd
+  Body Text (p/span):    var(--font-base) / 12px / bodyMd
+  Small Text:            var(--font-sm) / 11px / bodySm
+  Extra Small:           var(--font-xs) / 10px / bodyXs
   
   USAGE GUIDELINES:
   ─────────────────
@@ -66,7 +69,7 @@ body {
 .vto-card {
   background: var(--vto-card-bg);
   border: 1px solid var(--vto-border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   box-shadow: var(--vto-shadow);
   padding: 24px;
   margin-bottom: 12px;
@@ -80,14 +83,14 @@ body {
 }
 
 .vto-kpi-value {
-  font-size: 2rem;
+  font-size: 1.25rem;
   font-weight: 800;
   color: var(--vto-primary);
   margin-bottom: 4px;
 }
 
 .vto-kpi-label {
-  font-size: 0.875rem;
+  font-size: var(--font-sm);
   font-weight: 500;
   color: var(--vto-text-sub);
   text-transform: uppercase;
@@ -141,25 +144,27 @@ body {
 }
 
 .vto-title {
-  font-size: var(--font-xl);
+  font-size: var(--text-2xl);
   font-weight: 800;
   color: var(--vto-text-main);
   letter-spacing: -0.02em;
+  line-height: 1.25;
 }
 
 .vto-subtitle {
-  font-size: var(--font-sm);
+  font-size: var(--text-md);
+  font-weight: 500;
   line-height: 1.6;
-  color: var(--vto-text-sub);
+  color: var(--ink-700);
   margin-top: 8px;
 }
 
 .vto-section-intro {
-  font-size: 12px;
-  color: #111827;
+  font-size: var(--font-sm);
+  color: var(--vto-text-sub);
   line-height: 1.7;
   max-width: 740px;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .vto-slider-card {
@@ -196,13 +201,13 @@ body {
 .vto-slider-card-title {
   font-size: var(--font-base);
   font-weight: 700;
-  color: #111827;
+  color: var(--ink-900);
   line-height: 1.3;
 }
 
 .vto-slider-card-desc {
   font-size: var(--font-sm);
-  color: #4B5563;
+  color: var(--ink-500);
   line-height: 1.6;
 }
 
@@ -319,8 +324,8 @@ body {
   font-size: var(--font-2xl) !important;
 }
 
-.stat-icon-blue {
-  background: rgba(59, 91, 219, 0.1);
+.vto-stat-icon-blue {
+  background: rgba(var(--accent-rgb), 0.1);
   color: var(--vto-primary);
 }
 
@@ -334,11 +339,41 @@ body {
   color: #8B5CF6;
 }
 
+/* Shared banners — replaces one-off inline-styled success/critical/warning notices */
+.vto-banner {
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+}
+
+.vto-banner-success {
+  background: var(--success-50);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #065F46;
+}
+
+.vto-banner-critical {
+  background: var(--danger-50);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #991B1B;
+}
+
+.vto-banner-warning {
+  background: var(--warning-50);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #92400E;
+}
+
 /* Custom Badges */
 .vto-badge {
   padding: 4px 10px;
   border-radius: 9999px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
@@ -346,7 +381,7 @@ body {
 }
 
 .vto-badge-ready {
-  background: rgba(59, 91, 219, 0.1);
+  background: rgba(var(--accent-rgb), 0.1);
   color: var(--vto-primary);
 }
 
@@ -389,7 +424,7 @@ body {
   padding: 12px 16px;
   border-bottom: 1px solid var(--vto-border);
   color: var(--vto-text-sub);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -454,14 +489,14 @@ body {
 }
 
 .vto-card-title {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--vto-text-main);
   margin-bottom: 4px;
 }
 
 .vto-card-subtitle {
-  font-size: 13px;
+  font-size: 11px;
   color: var(--vto-text-sub);
   margin-bottom: 16px;
 }
@@ -481,7 +516,7 @@ body {
   padding: 8px 12px;
   padding-left: 36px;
   width: 100%;
-  font-size: 14px;
+  font-size: 12px;
   outline: none;
   transition: border-color 0.2s;
 }
@@ -521,7 +556,7 @@ body {
   border: 1px solid var(--vto-border);
   background: white;
   color: var(--vto-text-main);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -548,7 +583,7 @@ body {
 
 .vto-chart-bar {
   flex: 1;
-  background: rgba(59, 91, 219, 0.2);
+  background: rgba(var(--accent-rgb), 0.2);
   border-radius: 2px;
   transition: height 0.3s ease;
 }
@@ -593,12 +628,12 @@ body {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: rgba(59, 91, 219, 0.1);
+  background: rgba(var(--accent-rgb), 0.1);
   color: var(--vto-primary);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   margin-bottom: 12px;
 }
@@ -609,7 +644,7 @@ body {
   padding: 12px;
   border-radius: 8px;
 
-  font-size: 11px;
+  font-size: 10px;
   margin-top: 12px;
   overflow-x: auto;
 }
@@ -632,7 +667,7 @@ body {
 
 .vto-trend-up {
   color: #10B981;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -641,7 +676,7 @@ body {
 
 .vto-trend-down {
   color: #EF4444;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -653,7 +688,7 @@ body {
   border-radius: 4px;
   background: #F1F5F9;
   color: #475569;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
 }
 
@@ -714,9 +749,10 @@ body {
 .vto-slider-card {
   flex: 0 0 280px;
   scroll-snap-align: start;
-  background: white;
-  border-radius: 16px;
+  background: var(--surface-1);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--vto-border);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
   transition: all 0.2s ease;
 }
@@ -740,11 +776,11 @@ body {
 .vto-video-container {
   position: relative;
   width: 100%;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  background: #0F172A;
+  background: var(--ink-900);
   aspect-ratio: 16 / 9;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-lg);
 }
 
 .vto-video-overlay {
@@ -785,7 +821,7 @@ body {
   padding: 12px;
   border-radius: 12px;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.2s;
   display: flex;
@@ -843,7 +879,7 @@ body {
 }
 
 .vto-kpi-title {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: #64748B;
   text-transform: uppercase;
@@ -852,14 +888,14 @@ body {
 }
 
 .vto-kpi-value-large {
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 800;
   color: #0F172A;
   margin-bottom: 4px;
 }
 
 .vto-kpi-trend {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -981,7 +1017,7 @@ body {
   border: 1px solid #E2E8F0;
   padding: 8px 16px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   color: #64748B;
   cursor: pointer;
@@ -1011,7 +1047,7 @@ body {
 
 .vto-date-picker-sidebar-item {
   padding: 10px 20px;
-  font-size: 14px;
+  font-size: 12px;
   color: var(--vto-text-main);
   cursor: pointer;
   transition: all 0.2s;
@@ -1147,11 +1183,11 @@ body {
   }
 
   .vto-kpi-value-large {
-    font-size: 22px;
+    font-size: 18px;
   }
 
   .vto-kpi-value {
-    font-size: 1.5rem;
+    font-size: 1.125rem;
   }
 
   .vto-kpi-icon-overlay {
@@ -1216,7 +1252,7 @@ body {
   .vto-date-picker-sidebar-item {
     padding:       6px 12px;
     border-radius: 6px;
-    font-size:     13px;
+    font-size:     11px;
   }
 
   .vto-date-picker-content {
@@ -1283,11 +1319,11 @@ body {
   }
 
   .vto-kpi-value-large {
-    font-size: 20px;
+    font-size: 16px;
   }
 
   .vto-kpi-value {
-    font-size: 1.25rem;
+    font-size: 1rem;
   }
 
   .vto-kpi-trend {
@@ -1327,17 +1363,17 @@ body {
     height: 160px;
   }
 
-  .vto-table th { padding: 8px 10px; font-size: 10px; }
-  .vto-table td { padding: 10px;     font-size: 13px; }
+  .vto-table th { padding: 8px 10px; font-size: 9px; }
+  .vto-table td { padding: 10px;     font-size: 11px; }
 
   .vto-badge {
     padding:   3px 8px;
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .vto-range-button {
     padding:   6px 12px;
-    font-size: 13px;
+    font-size: 11px;
   }
 
   .vto-stat-icon-wrapper {
@@ -1349,7 +1385,7 @@ body {
     padding:       10px 12px;
     border-radius: 8px;
     margin-top:    20px;
-    font-size:     13px;
+    font-size:     11px;
   }
 
   .vto-slider-card {
@@ -1406,16 +1442,16 @@ body {
   align-items:    center;
   padding:        4px 14px;
   border-radius:  999px;
-  border:         1.5px solid #1D9E75;
-  color:          #1D9E75;
-  font-size:      11px;
+  border:         1.5px solid var(--success-500);
+  color:          var(--success-500);
+  font-size:      10px;
   font-weight:    700;
   letter-spacing: 0.08em;
   margin-bottom:  14px;
 }
 
 .vto-plan-page-title {
-  font-size:      2rem;
+  font-size:      1.125rem;
   font-weight:    800;
   color:          var(--vto-text-main);
   margin:         0 0 10px;
@@ -1424,7 +1460,7 @@ body {
 }
 
 .vto-plan-page-subtitle {
-  font-size:  0.9375rem;
+  font-size:  0.75rem;
   color:      var(--vto-text-sub);
   margin:     0;
   max-width:  480px;
@@ -1460,7 +1496,7 @@ body {
 }
 
 .vto-plan-card--featured {
-  border: 2px solid #1D9E75;
+  border: 2px solid var(--success-500);
 }
 
 /* ── Badge row ── */
@@ -1476,7 +1512,7 @@ body {
   align-items:    center;
   padding:        4px 12px;
   border-radius:  999px;
-  font-size:      11px;
+  font-size:      10px;
   font-weight:    700;
   letter-spacing: 0.06em;
 }
@@ -1487,7 +1523,7 @@ body {
 }
 
 .vto-plan-badge--popular {
-  background: #1D9E75;
+  background: var(--success-500);
   color:      #ffffff;
 }
 
@@ -1502,7 +1538,7 @@ body {
 }
 
 .vto-plan-name {
-  font-size:     13px;
+  font-size:     11px;
   font-weight:   700;
   color:         var(--vto-text-sub);
   text-transform: uppercase;
@@ -1511,7 +1547,7 @@ body {
 }
 
 .vto-plan-price {
-  font-size:      1.75rem;
+  font-size:      1.25rem;
   font-weight:    800;
   color:          var(--vto-text-main);
   margin:         0 0 8px;
@@ -1520,7 +1556,7 @@ body {
 }
 
 .vto-plan-desc {
-  font-size:   13px;
+  font-size:   11px;
   color:       var(--vto-text-sub);
   margin:      0;
   line-height: 1.55;
@@ -1541,7 +1577,7 @@ body {
   display:    flex;
   align-items: flex-start;
   gap:         8px;
-  font-size:   13px;
+  font-size:   11px;
   color:       var(--vto-text-sub);
   line-height: 1.45;
 }
@@ -1558,7 +1594,7 @@ body {
   width:           100%;
   padding:         11px 20px;
   border-radius:   8px;
-  font-size:       14px;
+  font-size:       12px;
   font-weight:     600;
   border:          none;
   cursor:          pointer;
@@ -1576,12 +1612,12 @@ body {
 }
 
 .vto-plan-btn--green {
-  background: #1D9E75;
+  background: var(--success-500);
   color:      #ffffff;
 }
 
 .vto-plan-btn--green:hover:not(:disabled) {
-  background: #178a64;
+  background: var(--success-600);
 }
 
 .vto-plan-btn--dark {
@@ -1611,7 +1647,7 @@ body {
 }
 
 .vto-faq-heading {
-  font-size:      1.25rem;
+  font-size:      1rem;
   font-weight:    700;
   color:          var(--vto-text-main);
   text-align:     center;
@@ -1634,14 +1670,14 @@ body {
   border:          none;
   cursor:          pointer;
   text-align:      left;
-  font-size:       14px;
+  font-size:       12px;
   font-weight:     600;
   color:           var(--vto-text-main);
   line-height:     1.4;
 }
 
 .vto-faq-question:hover {
-  color: #1D9E75;
+  color: var(--success-500);
 }
 
 .vto-faq-answer {
@@ -1653,7 +1689,7 @@ body {
 .vto-faq-answer p {
   padding:     0 0 16px;
   margin:      0;
-  font-size:   14px;
+  font-size:   12px;
   color:       var(--vto-text-sub);
   line-height: 1.65;
 }
@@ -1665,7 +1701,7 @@ body {
   }
 
   .vto-plan-page-title {
-    font-size: 1.625rem;
+    font-size: 1rem;
   }
 
   .vto-plan-grid {
@@ -1689,11 +1725,11 @@ body {
   }
 
   .vto-plan-page-title {
-    font-size: 1.375rem;
+    font-size: 0.9375rem;
   }
 
   .vto-plan-page-subtitle {
-    font-size: 13px;
+    font-size: 11px;
   }
 
   .vto-plan-grid {
@@ -1711,6 +1747,6 @@ body {
   }
 
   .vto-faq-heading {
-    font-size: 1.125rem;
+    font-size: 0.9375rem;
   }
 }

@@ -11,6 +11,8 @@ import {
   ProgressBar,
   DatePicker,
   TextField,
+  DataTable,
+  Badge,
 } from "@shopify/polaris";
 import {
   ViewIcon,
@@ -104,10 +106,11 @@ export async function loader({ request }) {
   const from = customFrom || getFromDate(range);
 
   const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
-  const [result, currencyRes, planRes] = await Promise.allSettled([
+  const [result, currencyRes, planRes, leadsRes] = await Promise.allSettled([
     api.getAnalytics({ from, to }),
     admin.graphql(CURRENCY_QUERY),
     api.checkPlanLimit(),
+    api.getLeads(100),
   ]);
 
   let currencyCode = "USD";
@@ -117,6 +120,7 @@ export async function loader({ request }) {
   }
 
   const planData = planRes.status === "fulfilled" && planRes.value.ok ? planRes.value.data : null;
+  const leads = leadsRes.status === "fulfilled" && leadsRes.value.ok ? leadsRes.value.data?.leads ?? [] : [];
 
   return {
     analytics:   result.status === "fulfilled" && result.value.ok ? result.value.data : null,
@@ -126,10 +130,11 @@ export async function loader({ request }) {
     shop:        session.shop,
     currencyCode,
     currentPlan: phpPlanToUi(planData?.plan ?? "basic"),
+    leads,
   };
 }
 
-function Sparkline({ data, color = "#3B5BDB", height = 40 }) {
+function Sparkline({ data, color = "#4F46E5", height = 40 }) {
   const hasRealData =
     Array.isArray(data) && data.length > 1 && data.some((v) => v > 0);
   const chartData = hasRealData ? data : Array(11).fill(0);
@@ -195,7 +200,6 @@ function KpiCard({ label, value, trend, icon, color, sparkData }) {
         <p
           className="vto-kpi-value-large"
           style={{
-            fontSize: "32px",
             marginBottom: "8px",
             color: "var(--vto-text-main)",
           }}
@@ -204,7 +208,7 @@ function KpiCard({ label, value, trend, icon, color, sparkData }) {
         </p>
         <div
           className="vto-kpi-trend"
-          style={{ color: isDown ? "#EF4444" : "#10B981" }}
+          style={{ color: isDown ? "var(--danger-500)" : "var(--success-500)" }}
         >
           <Icon source={isDown ? ArrowDownIcon : ArrowUpIcon} />
           {displayTrend}{" "}
@@ -235,7 +239,7 @@ function ActionCard({ label, value, trend, icon }) {
         <div
           style={{
             color: "var(--vto-text-sub)",
-            fontSize: "13px",
+            fontSize: "11px",
             fontWeight: "500",
             marginBottom: "4px",
           }}
@@ -244,7 +248,7 @@ function ActionCard({ label, value, trend, icon }) {
         </div>
         <div
           style={{
-            fontSize: "28px",
+            fontSize: "20px",
             fontWeight: "800",
             color: "var(--vto-text-main)",
             marginBottom: "4px",
@@ -252,7 +256,7 @@ function ActionCard({ label, value, trend, icon }) {
         >
           {Number(value).toLocaleString()}
         </div>
-        <div style={{ color: "#10B981", fontSize: "12px", fontWeight: "600" }}>
+        <div style={{ color: "var(--success-500)", fontSize: "11px", fontWeight: "600" }}>
           {displayTrend}
         </div>
       </BlockStack>
@@ -322,7 +326,7 @@ function ProductFitCard({
             variant="heading2xl"
             as="p"
             fontWeight="bold"
-            style={{ color: "var(--vto-text-main)", fontSize: "24px" }}
+            style={{ color: "var(--vto-text-main)", fontSize: "20px" }}
           >
             {Number(price).toLocaleString(undefined, { style: "currency", currency: currencyCode || "USD", maximumFractionDigits: 2 })}
           </Text>
@@ -339,8 +343,8 @@ function ProductFitCard({
           <BlockStack gap="0" align="end">
             <div
               style={{
-                color: "#10B981",
-                fontSize: "14px",
+                color: "var(--success-500)",
+                fontSize: "11px",
                 fontWeight: "700",
                 display: "flex",
                 alignItems: "center",
@@ -376,7 +380,7 @@ function ProductFitCard({
 }
 
 export default function Analytics() {
-  const { analytics, range, from, to, currencyCode = "USD", currentPlan } = useLoaderData();
+  const { analytics, range, from, to, currencyCode = "USD", currentPlan, leads = [] } = useLoaderData();
   const navigate = useNavigate();
 
   const [popoverActive, setPopoverActive] = React.useState(false);
@@ -471,7 +475,7 @@ export default function Analytics() {
                 padding: "4px",
                 marginTop: "6px",
                 borderRadius: "6px",
-                color: "#111827",
+                color: "var(--ink-900)",
               }}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -481,7 +485,7 @@ export default function Analytics() {
           <BlockStack gap="100">
             <h1
               style={{
-                fontSize: "32px",
+                fontSize: "18px",
                 fontWeight: "800",
                 letterSpacing: "-0.03em",
                 color: "var(--vto-text-main)",
@@ -489,7 +493,7 @@ export default function Analytics() {
             >
               Performance Overview
             </h1>
-            <p style={{ color: "var(--vto-text-sub)", fontSize: "15px" }}>
+            <p style={{ color: "var(--vto-text-sub)", fontSize: "12px" }}>
               Tracking AI engagement and conversion metrics
               {range === "today"
                 ? " for today"
@@ -545,8 +549,8 @@ export default function Analytics() {
                   zIndex: 519,
                   width: "820px",
                   maxWidth: "95vw",
-                  background: "#fff",
-                  borderRadius: "16px",
+                  background: "var(--surface-1)",
+                  borderRadius: "var(--radius-lg)",
                   boxShadow: "0 24px 80px rgba(0,0,0,0.22)",
                   overflow: "hidden",
                   display: "flex",
@@ -560,14 +564,14 @@ export default function Analytics() {
                     justifyContent: "space-between",
                     alignItems: "center",
                     padding: "16px 24px",
-                    borderBottom: "1px solid #E4E5E7",
+                    borderBottom: "1px solid var(--border-subtle)",
                   }}
                 >
                   <span
                     style={{
-                      fontSize: "16px",
+                      fontSize: "13px",
                       fontWeight: "700",
-                      color: "#202223",
+                      color: "var(--ink-900)",
                     }}
                   >
                     Select date range
@@ -589,7 +593,7 @@ export default function Analytics() {
                       background: "none",
                       border: "none",
                       fontSize: "20px",
-                      color: "#6D7175",
+                      color: "var(--ink-500)",
                       cursor: "pointer",
                       lineHeight: 1,
                       padding: "4px 8px",
@@ -605,7 +609,7 @@ export default function Analytics() {
                   <div
                     style={{
                       width: "190px",
-                      borderRight: "1px solid #E4E5E7",
+                      borderRight: "1px solid var(--border-subtle)",
                       padding: "8px 0",
                       flexShrink: 0,
                     }}
@@ -622,13 +626,13 @@ export default function Analytics() {
                             width: "100%",
                             textAlign: "left",
                             padding: "10px 20px",
-                            fontSize: "14px",
+                            fontSize: "12px",
                             fontWeight: isActive ? "600" : "400",
-                            color: isActive ? "#3B5BDB" : "#202223",
-                            background: isActive ? "#EEF2FF" : "transparent",
+                            color: isActive ? "var(--accent-500)" : "var(--ink-900)",
+                            background: isActive ? "var(--accent-50)" : "transparent",
                             border: "none",
                             borderLeft: isActive
-                              ? "3px solid #3B5BDB"
+                              ? "3px solid var(--accent-500)"
                               : "3px solid transparent",
                             cursor: "pointer",
                           }}
@@ -658,7 +662,7 @@ export default function Analytics() {
                 {/* Footer: date inputs + actions */}
                 <div
                   style={{
-                    borderTop: "1px solid #E4E5E7",
+                    borderTop: "1px solid var(--border-subtle)",
                     padding: "14px 24px",
                     display: "flex",
                     alignItems: "flex-end",
@@ -707,7 +711,7 @@ export default function Analytics() {
             value={Number(initiated).toLocaleString()}
             trend={kpis.tryon_trend || "+0.0%"}
             icon={ViewIcon}
-            color="#3B5BDB"
+            color="#4F46E5"
             sparkData={charts.tryons}
           />
           <KpiCard
@@ -755,7 +759,7 @@ export default function Analytics() {
                   color: "var(--vto-primary)",
                   padding: "6px 14px",
                   borderRadius: "99px",
-                  fontSize: "11px",
+                  fontSize: "10px",
                   fontWeight: "800",
                 }}
               >
@@ -800,17 +804,17 @@ export default function Analytics() {
                   {
                     label: "Mobile App",
                     value: deviceSplit.mobile || 0,
-                    color: "#3B5BDB",
+                    color: "var(--accent-500)",
                   },
                   {
                     label: "Desktop",
                     value: deviceSplit.desktop || 0,
-                    color: "#10B981",
+                    color: "var(--success-500)",
                   },
                   {
                     label: "Tablet",
                     value: deviceSplit.tablet || 0,
-                    color: "#F59E0B",
+                    color: "var(--warning-500)",
                   },
                 ].map((device) => (
                   <div key={device.label}>
@@ -858,7 +862,7 @@ export default function Analytics() {
                     cy="80"
                     r="65"
                     fill="none"
-                    stroke="#F1F5F9"
+                    stroke="var(--surface-2)"
                     strokeWidth="16"
                   />
                   <circle
@@ -866,7 +870,7 @@ export default function Analytics() {
                     cy="80"
                     r="65"
                     fill="none"
-                    stroke="#3B5BDB"
+                    stroke="var(--accent-500)"
                     strokeWidth="16"
                     strokeDasharray={`${(deviceSplit.mobile / 100) * 408} 408`}
                     strokeDashoffset="0"
@@ -878,7 +882,7 @@ export default function Analytics() {
                     cy="80"
                     r="65"
                     fill="none"
-                    stroke="#10B981"
+                    stroke="var(--success-500)"
                     strokeWidth="16"
                     strokeDasharray={`${(deviceSplit.desktop / 100) * 408} 408`}
                     strokeDashoffset={`-${(deviceSplit.mobile / 100) * 408}`}
@@ -889,7 +893,7 @@ export default function Analytics() {
                 <div className="vto-donut-center">
                   <p
                     style={{
-                      fontSize: "28px",
+                      fontSize: "20px",
                       fontWeight: "800",
                       color: "var(--vto-text-main)",
                       marginBottom: 0,
@@ -899,7 +903,7 @@ export default function Analytics() {
                   </p>
                   <p
                     style={{
-                      fontSize: "12px",
+                      fontSize: "11px",
                       color: "var(--vto-text-sub)",
                       fontWeight: "500",
                     }}
@@ -923,14 +927,14 @@ export default function Analytics() {
             <BlockStack gap="100">
               <h2
                 style={{
-                  fontSize: "24px",
+                  fontSize: "18px",
                   fontWeight: "800",
                   color: "var(--vto-text-main)",
                 }}
               >
                 Top Performing Fits
               </h2>
-              <p style={{ color: "var(--vto-text-sub)", fontSize: "15px" }}>
+              <p style={{ color: "var(--vto-text-sub)", fontSize: "12px" }}>
                 Products with highest Try-to-Cart conversion
               </p>
             </BlockStack>
@@ -964,7 +968,7 @@ export default function Analytics() {
                           : "TRENDING"
                     }
                     badgeBg={
-                      idx === 0 ? "#3B5BDB" : idx === 1 ? "#10B981" : "#8B5CF6"
+                      idx === 0 ? "var(--accent-500)" : idx === 1 ? "var(--success-500)" : "#8B5CF6"
                     }
                     image={product.image}
                   />
@@ -980,12 +984,11 @@ export default function Analytics() {
                   justifyContent: "center",
                   padding: "48px 24px",
                   background: "var(--vto-card-bg, #fff)",
-                  borderRadius: "16px",
-                  border: "1px dashed #E4E5E7",
+                  borderRadius: "var(--radius-lg)",
+                  border: "1px dashed var(--border-subtle)",
                   color: "var(--vto-text-sub)",
                 }}
               >
-                <div style={{ fontSize: "40px", marginBottom: "12px" }}>👗</div>
                 <Text variant="headingMd" as="p" fontWeight="bold">
                   No try-on data yet
                 </Text>
@@ -996,6 +999,87 @@ export default function Analytics() {
               </div>
             )}
           </div>
+        </BlockStack>
+
+        <BlockStack gap="400">
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-end",
+            }}
+          >
+            <BlockStack gap="100">
+              <h2
+                style={{
+                  fontSize: "18px",
+                  fontWeight: "800",
+                  color: "var(--vto-text-main)",
+                }}
+              >
+                Captured Leads
+              </h2>
+              <p style={{ color: "var(--vto-text-sub)", fontSize: "12px" }}>
+                Email and phone collected before shoppers unlock their try-on result
+              </p>
+            </BlockStack>
+            {leads.length > 0 && (
+              <Badge tone="info">{`${leads.length} total`}</Badge>
+            )}
+          </div>
+
+          {leads.length > 0 ? (
+            <div
+              className="vto-card"
+              style={{ padding: "0", borderRadius: "20px", margin: 0, overflow: "hidden" }}
+            >
+              <DataTable
+                columnContentTypes={["text", "text", "text", "text"]}
+                headings={["Email", "Phone", "Marketing consent", "Captured"]}
+                rows={leads.map((lead) => [
+                  lead.email,
+                  lead.phone,
+                  Number(lead.consent_marketing) === 1 ? (
+                    <Badge tone="success">Yes</Badge>
+                  ) : (
+                    <Badge>No</Badge>
+                  ),
+                  new Date(lead.created_at.replace(" ", "T")).toLocaleString(
+                    "en-US",
+                    {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    },
+                  ),
+                ])}
+              />
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "48px 24px",
+                background: "var(--vto-card-bg, #fff)",
+                borderRadius: "var(--radius-lg)",
+                border: "1px dashed var(--border-subtle)",
+                color: "var(--vto-text-sub)",
+              }}
+            >
+              <Text variant="headingMd" as="p" fontWeight="bold">
+                No leads captured yet
+              </Text>
+              <Text variant="bodyMd" color="subdued">
+                Emails and phone numbers will appear here once shoppers submit
+                their details to unlock a try-on result.
+              </Text>
+            </div>
+          )}
         </BlockStack>
       </BlockStack>
     </div>

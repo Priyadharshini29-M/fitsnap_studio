@@ -358,7 +358,18 @@ export default function Variants() {
   if (!product) {
     return (
       <Page title="Variant Mappings" backAction={{ onAction: () => navigate("/app/products"), content: "Products" }}>
-        <Text as="p">No product selected. Go back to Products.</Text>
+        <div className="vto-card" style={{ textAlign: "center", padding: "64px 24px" }}>
+          <div style={{ color: "var(--border-strong)", marginBottom: "12px" }}>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M3 15l5-5 4 4 3-3 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <Text as="p" variant="bodyMd" fontWeight="semibold">No product selected</Text>
+          <p style={{ fontSize: "12px", color: "var(--ink-500)", marginTop: "4px" }}>
+            Go back to Products and choose a product to map its variant images.
+          </p>
+        </div>
       </Page>
     );
   }
@@ -371,6 +382,7 @@ export default function Variants() {
   return (
     <Page
       title={`Variant Mappings — ${product.title}`}
+      subtitle="Assign a try-on image, garment type, and styling prompt to each variant."
       backAction={{ onAction: () => navigate("/app/products"), content: "Products" }}
     >
       <Layout>
@@ -381,6 +393,24 @@ export default function Variants() {
                 <p>{syncError}</p>
               </Banner>
             )}
+
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "4px 12px",
+                borderRadius: "var(--radius-pill)",
+                background: "var(--accent-50)",
+                color: "var(--accent-600)",
+                fontSize: "11px",
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                width: "fit-content",
+              }}
+            >
+              {variants.length} VARIANT{variants.length !== 1 ? "S" : ""}
+            </div>
 
             {variants.map((variant, idx) => {
               const numericId = variant.id.replace("gid://shopify/ProductVariant/", "");

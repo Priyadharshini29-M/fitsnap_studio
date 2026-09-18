@@ -460,13 +460,13 @@ function SectionCard({ title, description, children }) {
           borderBottom: "1px solid var(--vto-border)",
         }}
       >
-        <h3 className="vto-title" style={{ fontSize: "1rem" }}>
+        <h3 className="vto-title" style={{ fontSize: "0.875rem" }}>
           {title}
         </h3>
         {description && (
           <p
             className="vto-subtitle"
-            style={{ fontSize: "0.85rem", marginTop: "4px" }}
+            style={{ fontSize: "0.6875rem", marginTop: "4px" }}
           >
             {description}
           </p>
@@ -487,7 +487,7 @@ function ViewToggle({ value, onChange }) {
     <div
       style={{
         display: "inline-flex",
-        background: "#F3F4F6",
+        background: "var(--surface-2)",
         borderRadius: "20px",
         padding: "3px",
         gap: "2px",
@@ -499,10 +499,10 @@ function ViewToggle({ value, onChange }) {
           type="button"
           onClick={() => onChange(v)}
           style={{
-            background: value === v ? "#1a1a1a" : "transparent",
-            color: value === v ? "#ffffff" : "#9CA3AF",
+            background: value === v ? "var(--ink-900)" : "transparent",
+            color: value === v ? "#ffffff" : "var(--ink-300)",
             borderRadius: "20px",
-            fontSize: "12px",
+            fontSize: "10px",
             fontWeight: 600,
             height: "28px",
             padding: "0 14px",
@@ -572,7 +572,7 @@ function PositionCard({ id, label, sub, icon, active, onClick }) {
           onClick(id);
         }
       }}
-      className={`vto-card cursor-pointer transition-all duration-200 border-2 ${active ? "border-blue-600 bg-blue-50" : "border-transparent"}`}
+      className={`vto-card cursor-pointer transition-all duration-200 border-2 ${active ? "border-indigo-600 bg-indigo-50" : "border-transparent"}`}
       style={{
         padding: "16px",
         display: "flex",
@@ -582,12 +582,12 @@ function PositionCard({ id, label, sub, icon, active, onClick }) {
       }}
     >
       <div
-        className={`p-3 rounded-lg mb-3 ${active ? "text-blue-600" : "text-gray-400"}`}
+        className={`p-3 rounded-lg mb-3 ${active ? "text-indigo-600" : "text-gray-400"}`}
       >
         {icons[icon] ?? null}
       </div>
       <p
-        className={`text-sm font-bold ${active ? "text-blue-700" : "text-gray-900"}`}
+        className={`text-sm font-bold ${active ? "text-indigo-700" : "text-gray-900"}`}
       >
         {label}
       </p>
@@ -615,7 +615,7 @@ function IconPicker({ value, onChange }) {
           onClick={() => onChange(icon)}
           className={`flex-1 aspect-square max-w-[56px] rounded-xl flex items-center justify-center border-2 transition-all ${
             value === icon
-              ? "border-blue-600 bg-blue-50 text-blue-600"
+              ? "border-indigo-600 bg-indigo-50 text-indigo-600"
               : "border-gray-100 bg-white text-gray-400 hover:border-gray-200 hover:text-gray-600"
           }`}
         >
@@ -947,7 +947,7 @@ function SearchableSelect({ label, value, onChange, options }) {
                 paddingRight: "12px",
                 paddingTop: "8px",
                 paddingBottom: "8px",
-                fontSize: "13px",
+                fontSize: "12px",
                 border: "1px solid #E5E7EB",
                 borderRadius: "8px",
                 background: "#fff",
@@ -979,7 +979,7 @@ function SearchableSelect({ label, value, onChange, options }) {
                   width: "100%",
                   textAlign: "left",
                   padding: "10px 16px",
-                  fontSize: "13px",
+                  fontSize: "12px",
                   border: "none",
                   cursor: "pointer",
                   background: value === opt.value ? "#EEF2FF" : "transparent",
@@ -1001,7 +1001,7 @@ function SearchableSelect({ label, value, onChange, options }) {
                 {opt.nativeName && opt.nativeName !== opt.label && (
                   <span
                     style={{
-                      fontSize: "11px",
+                      fontSize: "10px",
                       color: "#9CA3AF",
                       flexShrink: 0,
                     }}
@@ -1016,7 +1016,7 @@ function SearchableSelect({ label, value, onChange, options }) {
               style={{
                 padding: "32px 16px",
                 textAlign: "center",
-                fontSize: "13px",
+                fontSize: "12px",
                 color: "#9CA3AF",
               }}
             >
@@ -1036,7 +1036,7 @@ function SearchableSelect({ label, value, onChange, options }) {
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: "11px", color: "#9CA3AF" }}>
+          <span style={{ fontSize: "10px", color: "#9CA3AF" }}>
             {filtered.length} of {options.length} languages
           </span>
           {query && (
@@ -1047,7 +1047,7 @@ function SearchableSelect({ label, value, onChange, options }) {
                 setQuery("");
               }}
               style={{
-                fontSize: "11px",
+                fontSize: "10px",
                 color: "#3B5BDB",
                 fontWeight: 600,
                 background: "none",
@@ -1068,7 +1068,7 @@ function SearchableSelect({ label, value, onChange, options }) {
       <label
         style={{
           display: "block",
-          fontSize: "13px",
+          fontSize: "12px",
           fontWeight: 700,
           color: "#111827",
           marginBottom: "6px",
@@ -1086,7 +1086,7 @@ function SearchableSelect({ label, value, onChange, options }) {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "10px 14px",
-          fontSize: "13px",
+          fontSize: "12px",
           border: "1px solid #E5E7EB",
           borderRadius: "10px",
           background: "#fff",
@@ -1116,7 +1116,7 @@ function SearchableSelect({ label, value, onChange, options }) {
             </span>
             {selected.nativeName && selected.nativeName !== selected.label && (
               <span
-                style={{ fontSize: "11px", color: "#9CA3AF", flexShrink: 0 }}
+                style={{ fontSize: "10px", color: "#9CA3AF", flexShrink: 0 }}
               >
                 {selected.nativeName}
               </span>
@@ -1187,7 +1187,7 @@ function Toggle({ checked, onChange, label, description, badge }) {
       >
         <span
           className="absolute inset-0 rounded-full transition-colors duration-200"
-          style={{ background: checked ? "#111827" : "#D1D5DB" }}
+          style={{ background: checked ? "var(--accent-500)" : "var(--border-strong)" }}
         />
         <span
           className="absolute top-[2px] w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-200"
@@ -1704,7 +1704,7 @@ export default function Settings() {
 
   // Typography
   const [subtitleFontSize, setSubtitleFontSize] = useState(
-    settings?.subtitle_font_size ?? 14,
+    settings?.subtitle_font_size ?? 12,
   );
   const [titleFontWeight, setTitleFontWeight] = useState(
     settings?.title_font_weight ?? "600",
@@ -1766,14 +1766,14 @@ export default function Settings() {
   });
   const [fontSizeByView, setFontSizeByView] = useState({
     desktop:
-      settings?.desktop_title_font_size ?? settings?.title_font_size ?? 20,
+      settings?.desktop_title_font_size ?? settings?.title_font_size ?? 16,
     mobile: settings?.mobile_title_font_size ?? 14,
   });
   const [paddingByView, setPaddingByView] = useState({
     desktop: {
-      top: settings?.desktop_padding_top ?? 10,
+      top: settings?.desktop_padding_top ?? 14,
       right: settings?.desktop_padding_right ?? 24,
-      bottom: settings?.desktop_padding_bottom ?? 10,
+      bottom: settings?.desktop_padding_bottom ?? 14,
       left: settings?.desktop_padding_left ?? 24,
     },
     mobile: {
@@ -1889,7 +1889,7 @@ export default function Settings() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#F6F6F7]">
+    <div className="min-h-screen bg-[var(--surface-0)]">
       {toastActive && (
         <Toast
           content="Settings saved successfully!"
@@ -1939,7 +1939,7 @@ export default function Settings() {
                 cursor: "pointer",
                 padding: "4px",
                 borderRadius: "6px",
-                color: "#111827",
+                color: "var(--ink-900)",
                 flexShrink: 0,
               }}
             >
@@ -1959,7 +1959,7 @@ export default function Settings() {
             <div>
               <h1
                 className="vto-title"
-                style={{ fontSize: "1.25rem", marginBottom: "2px" }}
+                style={{ fontSize: "0.875rem", marginBottom: "2px" }}
               >
                 Button Settings &amp; Configuration
               </h1>
@@ -1972,7 +1972,7 @@ export default function Settings() {
           <button
             onClick={handleSave}
             disabled={isSubmitting}
-            style={{ background: "#000000" }}
+            style={{ background: "var(--accent-500)" }}
             className="text-white px-8 py-2.5 rounded-xl shadow-lg shadow-black/10 hover:shadow-black/20 active:scale-95 transition-all text-sm font-bold disabled:opacity-60"
           >
             {isSubmitting ? "Saving…" : "Save Configuration"}
@@ -2077,12 +2077,12 @@ export default function Settings() {
                     }}
                   >
                     <div>
-                      <h3 className="vto-title" style={{ fontSize: "1rem" }}>
+                      <h3 className="vto-title" style={{ fontSize: "0.875rem" }}>
                         Size &amp; Dimensions
                       </h3>
                       <p
                         className="vto-subtitle"
-                        style={{ fontSize: "0.85rem", marginTop: "4px" }}
+                        style={{ fontSize: "0.6875rem", marginTop: "4px" }}
                       >
                         Widget container and button dimensions per view.
                       </p>
@@ -2156,7 +2156,7 @@ export default function Settings() {
                                       ? "#ffffff"
                                       : "#9CA3AF",
                                   borderRadius: "9px",
-                                  fontSize: "11px",
+                                  fontSize: "10px",
                                   fontWeight: 600,
                                   height: "28px",
                                   padding: "0 10px",
@@ -2241,7 +2241,7 @@ export default function Settings() {
                                       ? "#ffffff"
                                       : "#9CA3AF",
                                   borderRadius: "9px",
-                                  fontSize: "11px",
+                                  fontSize: "10px",
                                   fontWeight: 600,
                                   height: "28px",
                                   padding: "0 10px",
@@ -2298,12 +2298,12 @@ export default function Settings() {
                     }}
                   >
                     <div>
-                      <h3 className="vto-title" style={{ fontSize: "1rem" }}>
+                      <h3 className="vto-title" style={{ fontSize: "0.875rem" }}>
                         Padding
                       </h3>
                       <p
                         className="vto-subtitle"
-                        style={{ fontSize: "0.85rem", marginTop: "4px" }}
+                        style={{ fontSize: "0.6875rem", marginTop: "4px" }}
                       >
                         Inner spacing between button text and its edges.
                       </p>
@@ -2369,12 +2369,12 @@ export default function Settings() {
                       }}
                     >
                       <div>
-                        <h3 className="vto-title" style={{ fontSize: "1rem" }}>
+                        <h3 className="vto-title" style={{ fontSize: "0.875rem" }}>
                           Typography
                         </h3>
                         <p
                           className="vto-subtitle"
-                          style={{ fontSize: "0.85rem", marginTop: "4px" }}
+                          style={{ fontSize: "0.6875rem", marginTop: "4px" }}
                         >
                           Control font sizes, weights and families.
                         </p>

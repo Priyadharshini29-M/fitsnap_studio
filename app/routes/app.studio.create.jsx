@@ -16,22 +16,40 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
   const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
-  const [modelsRes, sessionsRes] = await Promise.all([
+  const [modelsRes, sessionsRes, productsRes, ragStatusRes] = await Promise.all([
     api.studioGetModels(),
     api.studioListSessions({ limit: 50 }),
+    api.getProducts(),
+    api.ragStatus(),
   ]);
   const sessions = sessionsRes.ok ? (sessionsRes.data?.sessions ?? []) : [];
   // Only offer results the merchant explicitly saved to the gallery — a fresh
   // Fashn AI generation the merchant hasn't kept yet shouldn't show up here.
-  const savedGenerations = sessions.filter(
-    (s) =>
-      Number(s.saved_to_gallery) === 1 &&
-      s.status === "completed" &&
-      s.result_image_url,
-  );
+  const seenSources = new Set();
+  const savedGenerations = sessions.filter((s) => {
+    if (
+      Number(s.saved_to_gallery) !== 1 ||
+      s.status !== "completed" ||
+      !s.result_image_url
+    )
+      return false;
+    // Dedupe repeat generations of the same source garment photo — sessions
+    // are newest-first, so the first one seen per source image is the one kept.
+    const sourceKey = s.front_image_url || s.result_image_url;
+    if (seenSources.has(sourceKey)) return false;
+    seenSources.add(sourceKey);
+    return true;
+  });
   return {
     models: modelsRes.ok ? (modelsRes.data?.models ?? {}) : {},
     savedGenerations,
+    // For the Marketing Infographic wizard's product picker — grounds
+    // generation in real product facts instead of only free-text description
+    // (see docs/rag-qdrant-implementation-plan.md).
+    products: productsRes.ok ? (productsRes.data ?? []) : [],
+    ragStatus: ragStatusRes.ok
+      ? ragStatusRes.data
+      : { enabled: false, indexed_products: 0, last_indexed_at: null },
   };
 };
 
@@ -58,50 +76,13 @@ export const action = async ({ request }) => {
       infographic: "full",
     };
 
-    let modelKey = body.model_key || null;
+    const modelKey = body.model_key || null;
 
-    // "Upload New Model" in the wizard has no model_key yet — just an ad-hoc
-    // photo URL. Claim the first unused registry slot for its gender and save
-    // the photo there, so it also becomes reusable from "Select Saved Model".
-    // Adult brackets are preferred — an arbitrary uploaded photo is virtually
-    // always an adult, and mislabeling it into a child/teen slot can trip the
-    // AI provider's content-safety checks (and mislabels the model regardless).
-    if (!modelKey && body.model_image_url) {
-      const gender = body.model_gender === "male" ? "male" : "female";
-      const modelsRes = await api.studioGetModels();
-      const models = modelsRes.ok ? (modelsRes.data?.models ?? {}) : {};
-      const slotPriority = [
-        "young_adult",
-        "adult",
-        "mature_adult",
-        "plus_size",
-        "teen_13_17",
-        "child_9_12",
-        "child_5_8",
-      ].map((suffix) => `${gender}_${suffix}`);
-      const emptySlot = slotPriority
-        .map((key) => models[key])
-        .find((m) => m && !m.image_exists);
-      if (!emptySlot) {
-        return Response.json(
-          {
-            error: `No empty ${gender} model slots available. Delete an existing model in Studio Models to add a new one.`,
-          },
-          { status: 400 },
-        );
-      }
-      const saveRes = await api.studioSetModelImage(
-        emptySlot.key,
-        body.model_image_url,
-      );
-      if (!saveRes.ok) {
-        return Response.json(
-          { error: saveRes.error ?? "Failed to save model photo" },
-          { status: 500 },
-        );
-      }
-      modelKey = emptySlot.key;
-    }
+    // "Upload New Model" in the wizard has no model_key — just an ad-hoc
+    // photo URL. PHP accepts model_image_url directly now, unlimited, not
+    // constrained by the registry's fixed 7-per-gender slots.
+    const modelImageUrl = !modelKey ? body.model_image_url || null : null;
+    const modelGender = body.model_gender === "male" ? "male" : "female";
 
     const phpBody = {
       front_image_url: body.front_image_url || null,
@@ -110,13 +91,14 @@ export const action = async ({ request }) => {
       detail_image_2_url: body.detail_image_2_url || null,
       detail_image_3_url: body.detail_image_3_url || null,
       model_key: modelKey,
+      model_image_url: modelImageUrl,
+      model_gender: modelGender,
       garment_type:
         body.garment_type ??
         garmentTypeByWorkflow[body.workflow_type] ??
         "full",
       clothing_prompt: body.clothing_prompt || null,
       workflow_type: body.workflow_type || null,
-      fashn_model: body.fashn_model || null,
     };
     if (!phpBody.front_image_url) {
       return Response.json(
@@ -155,9 +137,22 @@ export const action = async ({ request }) => {
     const res = await api.infographicCreate({
       product_image_url: body.product_image_url,
       description: body.description,
-      style: body.style ?? "modern",
+      // No more merchant-picked style/category — the PHP side looks at the
+      // photo itself (gpt-4o-mini vision) and picks whichever real design
+      // archetype (fmcg / clothing / kids clothing, then a specific layout
+      // pattern) actually suits it. custom_style_prompt is still an optional
+      // free-text override the merchant can type on top of that.
       custom_style_prompt: body.custom_style_prompt || null,
-      product_category: body.product_category || "clothing",
+      size: body.size || null,
+      collage: !!body.collage,
+      // Optional "match a reference" mode — when set, the PHP side skips
+      // archetype detection entirely and replicates THIS image's actual
+      // design (background/composition/palette/label mechanic) instead.
+      reference_image_url: body.reference_image_url || null,
+      // RAG grounding — when set, the PHP side extracts key points from real
+      // product facts (title/vendor/type/tags/description) instead of only
+      // the free-text description above (see docs/rag-qdrant-implementation-plan.md).
+      product_id: body.product_id || null,
     });
     return Response.json(
       res.ok
@@ -181,15 +176,31 @@ export const action = async ({ request }) => {
     const res = await api.infographicGenerate({
       product_image_url: body.product_image_url,
       key_points: body.key_points,
-      style: body.style ?? "modern",
+      // Vision classification (fmcg/clothing/kids clothing + archetype) runs
+      // fresh on the PHP side for every call, including "Regenerate" — see
+      // the infographic-create comment above.
       custom_style_prompt: body.custom_style_prompt || null,
-      product_category: body.product_category || "clothing",
       variation: body.variation ?? 1,
+      size: body.size || null,
+      collage: !!body.collage,
+      reference_image_url: body.reference_image_url || null,
+      product_id: body.product_id || null,
+      // "Regenerate" variety — archetype ids already shown in this gallery,
+      // so the PHP side hard-filters them out and is forced to pick a
+      // genuinely different skill.md archetype this time.
+      exclude_archetypes: body.exclude_archetypes || [],
     });
     return Response.json(
       res.ok
         ? res.data
         : { error: res.error ?? "Infographic generation failed" },
+      { status: res.ok ? 200 : 500 },
+    );
+  }
+  if (body._action === "rag-reindex") {
+    const res = await api.ragReindex();
+    return Response.json(
+      res.ok ? res.data : { error: res.error ?? "Reindex failed" },
       { status: res.ok ? 200 : 500 },
     );
   }
@@ -292,7 +303,7 @@ const WORKFLOWS = [
     id: "infographic",
     title: "Marketing Infographic",
     desc: "Turn a saved Fashn AI model photo — or a fresh upload — into a promotional infographic with OpenAI-extracted highlights.",
-    steps: ["Source Image", "Description", "Style", "Review", "Output"],
+    steps: ["Source Image", "Description", "Options", "Review", "Output"],
   },
 ];
 
@@ -306,26 +317,10 @@ const ACCESSORY_PLACEMENTS = {
   ring: ["Ring Finger (Left)", "Ring Finger (Right)", "Index Finger"],
 };
 
-const TEMPLATES = [
-  { id: "fashion", label: "Fashion", desc: "Editorial, trend-forward layout." },
-  { id: "luxury", label: "Luxury", desc: "Minimalist, premium feel." },
-  { id: "modern", label: "Modern", desc: "Clean grid, strong contrast." },
-  { id: "minimal", label: "Minimal", desc: "White-space forward design." },
-  {
-    id: "ecommerce",
-    label: "Ecommerce",
-    desc: "Conversion-focused with callouts.",
-  },
-  {
-    id: "catalog",
-    label: "Catalog",
-    desc: "Numbered spec markers, technical spec-sheet look.",
-  },
-  {
-    id: "collage",
-    label: "Collage",
-    desc: "2x2 multi-panel grid, social-carousel style.",
-  },
+const SIZE_OPTIONS = [
+  { id: "portrait", label: "Portrait", desc: "1024×1536 — tall, best for full-length garment/model shots." },
+  { id: "square", label: "Square", desc: "1024×1024 — best for packaged goods and social posts." },
+  { id: "landscape", label: "Landscape", desc: "1536×1024 — wide, best for banners." },
 ];
 
 // ── Product type data ─────────────────────────────────────────────────────────
@@ -520,6 +515,71 @@ function downloadUrl(url, filename) {
   a.click();
 }
 
+// Infographic gallery entries key off `{archetype_id}-v{variation}` (see
+// InfographicController::toResults()) — this pulls the archetype id back
+// out so "Regenerate" can tell the PHP side which archetypes have already
+// been shown for this product, forcing genuine variety across clicks
+// instead of the same archetype re-styled each time.
+function archetypeIdFromResultKey(key) {
+  return typeof key === "string" ? key.replace(/-v\d+$/, "") : null;
+}
+
+/**
+ * Shared submit-and-wait helper for the infographic-create/-generate/-edit
+ * actions — synchronous: PHP runs the whole pipeline (classification,
+ * extraction, scene/layout planning, compose, QC) inline and responds with
+ * the finished result in one request/response cycle. A single gpt-image-1
+ * compose call alone can measure 100-115s+ (see php-api.server.js's
+ * infographicCreate/Generate/Edit timeouts, sized to match). Kept as a
+ * shared hook (rather than inlining a useFetcher() at each call site)
+ * purely to dedupe the small amount of submit/result/error plumbing needed
+ * at all 7 call sites across this file (the dedicated Infographic wizard,
+ * the 4 quick-addon flows, OutputScreen's regenerate, and InfographicCard's
+ * edit) instead of duplicating it at each one.
+ *
+ * Callers read `result`/`error` via their own small useEffect (plain state
+ * values in the dependency array, same idiom the rest of this file already
+ * uses) rather than passing completion callbacks into this hook — avoids
+ * stale-closure/exhaustive-deps complications entirely.
+ */
+function useInfographicJob() {
+  const submitFetcher = useFetcher();
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const isPending = submitFetcher.state !== "idle";
+
+  useEffect(() => {
+    if (submitFetcher.state === "idle" && submitFetcher.data) {
+      if (submitFetcher.data.error) {
+        setError(submitFetcher.data.error);
+      } else {
+        setResult(submitFetcher.data);
+      }
+    }
+  }, [submitFetcher.state, submitFetcher.data]);
+
+  const submit = useCallback(
+    (payload) => {
+      setError(null);
+      setResult(null);
+      submitFetcher.submit(payload, {
+        method: "POST",
+        action: "/app/studio/create",
+        encType: "application/json",
+      });
+    },
+    [submitFetcher],
+  );
+
+  const reset = useCallback(() => {
+    setResult(null);
+    setError(null);
+  }, []);
+
+  return { submit, reset, isPending, result, error };
+}
+
 // ── Resolve model info ────────────────────────────────────────────────────────
 
 function resolveModel(models, key) {
@@ -536,7 +596,7 @@ function resolveModel(models, key) {
 
 // ── Shared atoms ──────────────────────────────────────────────────────────────
 
-function Spin({ size = 20, color = "#4F46E5" }) {
+function Spin({ size = 20, color = "var(--accent-500)" }) {
   return (
     <span
       style={{
@@ -563,14 +623,14 @@ function FieldLabel({ children, required, hint }) {
         gap: "4px",
       }}
     >
-      <span style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>
+      <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--ink-900)" }}>
         {children}
       </span>
       {required && (
-        <span style={{ color: "#EF4444", fontSize: "12px" }}>*</span>
+        <span style={{ color: "var(--danger-500)", fontSize: "12px" }}>*</span>
       )}
       {hint && (
-        <span style={{ fontSize: "11px", color: "#9CA3AF", fontWeight: 400 }}>
+        <span style={{ fontSize: "11px", color: "var(--ink-300)", fontWeight: 400 }}>
           {hint}
         </span>
       )}
@@ -708,13 +768,13 @@ function UploadZone({
         <p
           style={{
             fontSize: "12px",
-            color: "#6B7280",
+            color: "var(--ink-500)",
             margin: "0 0 8px",
             lineHeight: 1.5,
-            background: "#F9FAFB",
+            background: "var(--surface-2)",
             padding: "8px 10px",
             borderRadius: "6px",
-            borderLeft: "3px solid #D1D5DB",
+            borderLeft: "3px solid var(--border-strong)",
           }}
         >
           {note}
@@ -750,7 +810,7 @@ function UploadZone({
             }}
           >
             <Spin size={22} />
-            <span style={{ fontSize: "12px", color: "#6B7280" }}>
+            <span style={{ fontSize: "12px", color: "var(--ink-500)" }}>
               Uploading…
             </span>
           </div>
@@ -777,7 +837,7 @@ function UploadZone({
               viewBox="0 0 24 24"
               fill="none"
               style={{
-                color: "#9CA3AF",
+                color: "var(--ink-300)",
                 display: "block",
                 margin: "0 auto 8px",
               }}
@@ -808,18 +868,18 @@ function UploadZone({
             <p
               style={{
                 fontSize: "12px",
-                color: "#6B7280",
+                color: "var(--ink-500)",
                 margin: 0,
                 lineHeight: 1.5,
               }}
             >
               Drop image here or{" "}
-              <span style={{ color: "#4F46E5", fontWeight: 600 }}>
+              <span style={{ color: "var(--accent-500)", fontWeight: 600 }}>
                 click to browse
               </span>
             </p>
             <p
-              style={{ fontSize: "10px", color: "#9CA3AF", margin: "4px 0 0" }}
+              style={{ fontSize: "10px", color: "var(--ink-300)", margin: "4px 0 0" }}
             >
               JPEG · PNG · WEBP · Max 5 MB
             </p>
@@ -884,43 +944,20 @@ function UploadZone({
 
 // ── Workflow colour map ───────────────────────────────────────────────────────
 
+const BRAND = { accent: "var(--accent-500)", light: "var(--accent-50)", dark: "var(--accent-600)" };
+
 const WF_COLORS = {
-  "model-generation": {
-    accent: "#6366F1",
-    light: "#EEF2FF",
-    dark: "#4338CA",
-    time: "~45 sec",
-  },
-  "flat-lay": {
-    accent: "#0EA5E9",
-    light: "#E0F2FE",
-    dark: "#0284C7",
-    time: "~60 sec",
-  },
-  mannequin: {
-    accent: "#7C3AED",
-    light: "#F5F3FF",
-    dark: "#6D28D9",
-    time: "~50 sec",
-  },
-  accessories: {
-    accent: "#F59E0B",
-    light: "#FEF3C7",
-    dark: "#D97706",
-    time: "~40 sec",
-  },
-  infographic: {
-    accent: "#10B981",
-    light: "#D1FAE5",
-    dark: "#059669",
-    time: "~90 sec",
-  },
+  "model-generation": { ...BRAND, time: "~45 sec" },
+  "flat-lay": { ...BRAND, time: "~60 sec" },
+  mannequin: { ...BRAND, time: "~50 sec" },
+  accessories: { ...BRAND, time: "~40 sec" },
+  infographic: { ...BRAND, time: "~90 sec" },
 };
 
 // ── Progress Stepper ──────────────────────────────────────────────────────────
 
 function Stepper({ steps, current, wfId }) {
-  const col = WF_COLORS[wfId] ?? { accent: "#4F46E5", light: "#EEF2FF" };
+  const col = WF_COLORS[wfId] ?? BRAND;
   // pct = how far along the rail (0 at first dot, 100 at last dot)
   const pct = steps.length > 1 ? (current / (steps.length - 1)) * 100 : 0;
 
@@ -1137,10 +1174,12 @@ function InfographicAddon({
   onChange,
   description,
   onDescriptionChange,
-  style,
-  onStyleChange,
   customStyle,
   onCustomStyleChange,
+  collage,
+  onCollageChange,
+  referenceImageUrl,
+  onReferenceImageChange,
 }) {
   return (
     <div className="cr-addon-row">
@@ -1181,7 +1220,8 @@ function InfographicAddon({
           <p className="cr-addon-title">Also generate Marketing Infographic</p>
           <p className="cr-addon-sub">
             AI reads your product description, pulls out key highlights, and
-            composes an infographic with your image.
+            looks at the photo itself to pick a matching design before
+            composing the infographic.
           </p>
         </div>
         <div className="cr-addon-right">
@@ -1194,7 +1234,7 @@ function InfographicAddon({
 
       {checked && (
         <div
-          style={{ padding: "12px 14px 14px", borderTop: "1px solid #F3F4F6" }}
+          style={{ padding: "12px 14px 14px", borderTop: "1px solid var(--surface-2)" }}
         >
           <div style={{ marginBottom: "10px" }}>
             <FieldLabel
@@ -1213,23 +1253,6 @@ function InfographicAddon({
             />
           </div>
           <div style={{ marginBottom: "10px" }}>
-            <FieldLabel hint="optional">Infographic Style</FieldLabel>
-            <select
-              className="cr-input"
-              style={{ cursor: "pointer", margin: 0 }}
-              value={style}
-              onChange={(e) => onStyleChange(e.target.value)}
-            >
-              <option value="modern">Modern</option>
-              <option value="fashion">Fashion</option>
-              <option value="luxury">Luxury</option>
-              <option value="minimal">Minimal</option>
-              <option value="ecommerce">Ecommerce</option>
-              <option value="catalog">Catalog</option>
-              <option value="collage">Collage</option>
-            </select>
-          </div>
-          <div style={{ marginBottom: 0 }}>
             <FieldLabel hint="optional — describe how you want the background/theme to look">
               Custom Background / Theme
             </FieldLabel>
@@ -1242,6 +1265,36 @@ function InfographicAddon({
               style={{ resize: "vertical", lineHeight: 1.5, margin: 0 }}
             />
           </div>
+          <div style={{ marginBottom: "10px" }}>
+            <FieldLabel hint="optional — upload an example infographic to replicate its exact design instead of AI auto-picking one">
+              Match a Reference Design
+            </FieldLabel>
+            <UploadZone
+              compact
+              value={referenceImageUrl}
+              onChange={onReferenceImageChange}
+              note="If set, this overrides auto-detection — the layout, palette, and label style are copied from this image."
+            />
+          </div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              fontSize: "12px",
+              color: referenceImageUrl ? "var(--ink-300)" : "var(--ink-700)",
+              cursor: referenceImageUrl ? "not-allowed" : "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={collage}
+              disabled={!!referenceImageUrl}
+              onChange={(e) => onCollageChange(e.target.checked)}
+            />
+            Generate as a 4-image collage set (hero, 2 detail zooms, features)
+            instead of one image
+          </label>
         </div>
       )}
     </div>
@@ -1357,13 +1410,13 @@ function ModelSelector({ models, selectedKey, onSelect }) {
           <p
             style={{
               fontSize: "12px",
-              color: "#6B7280",
+              color: "var(--ink-500)",
               margin: "0 0 12px",
               lineHeight: 1.6,
-              background: "#F9FAFB",
+              background: "var(--surface-2)",
               padding: "8px 10px",
               borderRadius: "6px",
-              borderLeft: "3px solid #D1D5DB",
+              borderLeft: "3px solid var(--border-strong)",
             }}
           >
             Upload a full-body, front-facing model photo on a clean background.
@@ -1424,7 +1477,7 @@ function ModelSelector({ models, selectedKey, onSelect }) {
               <p
                 style={{
                   fontSize: "12px",
-                  color: "#9CA3AF",
+                  color: "var(--ink-300)",
                   gridColumn: "1 / -1",
                 }}
               >
@@ -1462,14 +1515,14 @@ function ReviewThumb({ label, src }) {
           height: 90,
           objectFit: "cover",
           borderRadius: 8,
-          border: "1px solid #E5E7EB",
+          border: "1px solid var(--border-subtle)",
           display: "block",
         }}
       />
       <span
         style={{
           fontSize: "10px",
-          color: "#9CA3AF",
+          color: "var(--ink-300)",
           marginTop: "4px",
           display: "block",
         }}
@@ -1484,7 +1537,7 @@ function ReviewTable({ rows }) {
   return (
     <div
       style={{
-        border: "1px solid #E5E7EB",
+        border: "1px solid var(--border-subtle)",
         borderRadius: "8px",
         overflow: "hidden",
         marginTop: "16px",
@@ -1498,7 +1551,7 @@ function ReviewTable({ rows }) {
             style={{
               display: "flex",
               padding: "9px 14px",
-              borderBottom: i < rows.length - 1 ? "1px solid #F3F4F6" : "none",
+              borderBottom: i < rows.length - 1 ? "1px solid var(--surface-2)" : "none",
             }}
           >
             <span
@@ -1506,14 +1559,14 @@ function ReviewTable({ rows }) {
                 width: "130px",
                 flexShrink: 0,
                 fontSize: "12px",
-                color: "#9CA3AF",
+                color: "var(--ink-300)",
                 fontWeight: 500,
               }}
             >
               {k}
             </span>
             <span
-              style={{ fontSize: "12px", color: "#111827", fontWeight: 500 }}
+              style={{ fontSize: "12px", color: "var(--ink-900)", fontWeight: 500 }}
             >
               {v}
             </span>
@@ -1526,7 +1579,7 @@ function ReviewTable({ rows }) {
 // ── Generating Screen ─────────────────────────────────────────────────────────
 
 function GeneratingScreen({ wfId }) {
-  const col = WF_COLORS[wfId] ?? { accent: "#4F46E5", light: "#EEF2FF" };
+  const col = WF_COLORS[wfId] ?? BRAND;
   const stages =
     wfId === "infographic"
       ? [
@@ -1570,14 +1623,7 @@ function GeneratingScreen({ wfId }) {
       {/* Animated ring */}
       <div className="cr-gen-orbit" style={{ "--accent": col.accent }}>
         <div className="cr-gen-orbit-ring" />
-        <div className="cr-gen-orbit-inner" />
-        <svg
-          width="28"
-          height="28"
-          viewBox="0 0 24 24"
-          fill="none"
-          style={{ position: "absolute", zIndex: 2 }}
-        >
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
           <path
             d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
             fill={col.accent}
@@ -1629,7 +1675,7 @@ function GeneratingScreen({ wfId }) {
                     width: "5px",
                     height: "5px",
                     borderRadius: "50%",
-                    background: "#D1D5DB",
+                    background: "var(--border-strong)",
                   }}
                 />
               )}
@@ -1679,7 +1725,7 @@ function OutputScreen({
   infographicRegenInput,
   onInfographicAppend,
 }) {
-  const col = WF_COLORS[wfId] ?? { accent: "#4F46E5", light: "#EEF2FF" };
+  const col = WF_COLORS[wfId] ?? BRAND;
   const fetcher = useFetcher();
   const [saved, setSaved] = useState(false);
 
@@ -1699,44 +1745,46 @@ function OutputScreen({
   const download = () => downloadUrl(result, `studio_${Date.now()}.jpg`);
 
   // ── Infographic "regenerate" (up to 5 visually distinct variations) ────────
-  const regenFetcher = useFetcher();
+  const regenJob = useInfographicJob();
   const [regenError, setRegenError] = useState(null);
-  const isRegenerating = regenFetcher.state !== "idle";
+  const isRegenerating = regenJob.isPending;
   const regenCount = infographicResult?.length ?? 0;
   const canRegenerate =
     !!infographicRegenInput?.imageUrl &&
     infographicRegenInput?.keyPoints?.length > 0;
 
   useEffect(() => {
-    if (regenFetcher.state === "idle" && regenFetcher.data) {
-      if (regenFetcher.data.results?.length) {
-        setRegenError(null);
-        onInfographicAppend?.(regenFetcher.data.results[0]);
-      } else if (regenFetcher.data.error) {
-        setRegenError(regenFetcher.data.error);
-      }
+    if (regenJob.result) {
+      setRegenError(null);
+      onInfographicAppend?.(regenJob.result.results?.[0]);
     }
-  }, [regenFetcher.state, regenFetcher.data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regenJob.result]);
+
+  useEffect(() => {
+    if (regenJob.error) setRegenError(regenJob.error);
+  }, [regenJob.error]);
 
   const regenerate = () => {
     if (!infographicRegenInput) return;
     setRegenError(null);
-    regenFetcher.submit(
-      {
-        _action: "infographic-generate",
-        product_image_url: infographicRegenInput.imageUrl,
-        key_points: infographicRegenInput.keyPoints,
-        style: infographicRegenInput.style ?? "modern",
-        custom_style_prompt: infographicRegenInput.customStylePrompt || null,
-        product_category: infographicRegenInput.category || "clothing",
-        variation: regenCount + 1,
-      },
-      {
-        method: "POST",
-        action: "/app/studio/create",
-        encType: "application/json",
-      },
-    );
+    regenJob.submit({
+      _action: "infographic-generate",
+      product_image_url: infographicRegenInput.imageUrl,
+      key_points: infographicRegenInput.keyPoints,
+      custom_style_prompt: infographicRegenInput.customStylePrompt || null,
+      size: infographicRegenInput.size || null,
+      collage: !!infographicRegenInput.collage,
+      reference_image_url: infographicRegenInput.referenceImageUrl || null,
+      variation: regenCount + 1,
+      exclude_archetypes: [
+        ...new Set(
+          (infographicResult ?? [])
+            .map((r) => archetypeIdFromResultKey(r.key))
+            .filter(Boolean),
+        ),
+      ],
+    });
   };
 
   return (
@@ -1746,7 +1794,7 @@ function OutputScreen({
         className="cr-complete-header"
         style={{ "--accent": col.accent, "--light": col.light }}
       >
-        <div className="cr-complete-check" style={{ background: col.accent }}>
+        <div className="cr-complete-check">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
             <path
               d="M5 12l5 5L20 7"
@@ -1758,31 +1806,10 @@ function OutputScreen({
           </svg>
         </div>
         <div>
-          <p className="cr-complete-title">Generation complete!</p>
+          <p className="cr-complete-title">Generation complete</p>
           <p className="cr-complete-sub">
             Your asset is ready to download or save to your library.
           </p>
-        </div>
-        {/* Decorative dots */}
-        <div className="cr-confetti">
-          {[...Array(8)].map((_, i) => (
-            <span
-              key={i}
-              className="cr-confetti-dot"
-              style={{
-                background: [
-                  col.accent,
-                  "#F59E0B",
-                  "#10B981",
-                  "#EC4899",
-                  "#06B6D4",
-                  "#F97316",
-                ][i % 6],
-                animationDelay: `${i * 0.12}s`,
-                left: `${8 + i * 11}%`,
-              }}
-            />
-          ))}
         </div>
       </div>
 
@@ -1961,7 +1988,7 @@ function OutputScreen({
                     )}
                   </button>
                 ) : (
-                  <span style={{ fontSize: "12px", color: "#9CA3AF" }}>
+                  <span style={{ fontSize: "12px", color: "var(--ink-300)" }}>
                     Max 5 variations reached.
                   </span>
                 )}
@@ -2019,7 +2046,7 @@ const TEXT_COLORS = [
 ];
 const BG_COLORS = [
   "#FFFFFF",
-  "#F9FAFB",
+  "#F3F4F6",
   "#FEF3C7",
   "#DBEAFE",
   "#FCE7F3",
@@ -2060,8 +2087,8 @@ const BG_GRADIENTS = [
 ];
 
 function InfographicCard({ result, onUpdate }) {
-  const editFetcher = useFetcher();
-  const [panel, setPanel] = useState(null); // null | "prompt" | "style"
+  const editJob = useInfographicJob();
+  const [panel, setPanel] = useState(null); // null | "style" — the prompt bar is always visible now
   const [editPrompt, setEditPrompt] = useState("");
   const [textColor, setTextColor] = useState(null);
   const [textSize, setTextSize] = useState(null);
@@ -2071,42 +2098,36 @@ function InfographicCard({ result, onUpdate }) {
   const [bgImageUrl, setBgImageUrl] = useState(null);
   const [bgUploading, setBgUploading] = useState(false);
   const [editError, setEditError] = useState(null);
-  const isEditing = editFetcher.state !== "idle";
+  const isEditing = editJob.isPending;
 
   useEffect(() => {
-    if (editFetcher.state === "idle" && editFetcher.data) {
-      if (editFetcher.data.results?.length) {
-        onUpdate(editFetcher.data.results[0].image);
-        setPanel(null);
-        setEditPrompt("");
-        setTextColor(null);
-        setTextSize(null);
-        setTextWeight(null);
-        setBgColor(null);
-        setBgGradient(null);
-        setBgImageUrl(null);
-        setEditError(null);
-      } else if (editFetcher.data.error) {
-        setEditError(editFetcher.data.error);
-      }
+    if (editJob.result?.results?.length) {
+      onUpdate(editJob.result.results[0].image);
+      setPanel(null);
+      setEditPrompt("");
+      setTextColor(null);
+      setTextSize(null);
+      setTextWeight(null);
+      setBgColor(null);
+      setBgGradient(null);
+      setBgImageUrl(null);
+      setEditError(null);
     }
-  }, [editFetcher.state, editFetcher.data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editJob.result]);
+
+  useEffect(() => {
+    if (editJob.error) setEditError(editJob.error);
+  }, [editJob.error]);
 
   const submitEdit = (prompt, backgroundImageUrl = null) => {
     setEditError(null);
-    editFetcher.submit(
-      {
-        _action: "infographic-edit",
-        image_url: result.image,
-        edit_prompt: prompt,
-        background_image_url: backgroundImageUrl,
-      },
-      {
-        method: "POST",
-        action: "/app/studio/create",
-        encType: "application/json",
-      },
-    );
+    editJob.submit({
+      _action: "infographic-edit",
+      image_url: result.image,
+      edit_prompt: prompt,
+      background_image_url: backgroundImageUrl,
+    });
   };
 
   const applyEdit = () => {
@@ -2210,7 +2231,7 @@ function InfographicCard({ result, onUpdate }) {
           gap: "8px",
         }}
       >
-        <span style={{ fontSize: "12px", fontWeight: 600, color: "#374151" }}>
+        <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--ink-700)" }}>
           {result.label}
         </span>
         <div style={{ display: "flex", gap: "6px" }}>
@@ -2222,15 +2243,6 @@ function InfographicCard({ result, onUpdate }) {
             disabled={isEditing}
           >
             Style
-          </button>
-          <button
-            type="button"
-            className="cr-btn cr-btn-outline"
-            style={{ padding: "4px 10px", fontSize: "12px" }}
-            onClick={() => setPanel((p) => (p === "prompt" ? null : "prompt"))}
-            disabled={isEditing}
-          >
-            Edit
           </button>
           <button
             type="button"
@@ -2248,13 +2260,53 @@ function InfographicCard({ result, onUpdate }) {
         </div>
       </div>
 
+      {/* Always-visible AI edit prompt bar — type a change and regenerate, chat-box style. */}
+      <div
+        style={{ display: "flex", gap: "6px", marginTop: "8px" }}
+      >
+        <input
+          type="text"
+          className="cr-input"
+          style={{ flex: 1, margin: 0, fontSize: "12px" }}
+          value={editPrompt}
+          onChange={(e) => setEditPrompt(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && editPrompt.trim() && !isEditing) {
+              e.preventDefault();
+              applyEdit();
+            }
+          }}
+          placeholder="Describe a change and regenerate — e.g. “remove the bottom label”, “add a festive theme”"
+          disabled={isEditing}
+        />
+        <button
+          type="button"
+          className="cr-btn-save"
+          style={{
+            background: "#059669",
+            fontSize: "12px",
+            padding: "6px 14px",
+            whiteSpace: "nowrap",
+          }}
+          onClick={applyEdit}
+          disabled={isEditing || !editPrompt.trim()}
+        >
+          {isEditing ? "Applying…" : "Regenerate"}
+        </button>
+      </div>
+      {editError && (
+        <p style={{ fontSize: "11px", color: "#DC2626", margin: "6px 0 0" }}>
+          {editError}
+        </p>
+      )}
+
       {panel === "style" && (
         <div
           style={{
             marginTop: "8px",
             padding: "10px",
-            background: "#F9FAFB",
-            border: "1px solid #E5E7EB",
+            background: "var(--surface-2)",
+            border: "1px solid var(--border-subtle)",
             borderRadius: "8px",
           }}
         >
@@ -2281,7 +2333,7 @@ function InfographicCard({ result, onUpdate }) {
                   background: c,
                   cursor: "pointer",
                   border:
-                    textColor === c ? "2px solid #4F46E5" : "1px solid #E5E7EB",
+                    textColor === c ? "2px solid var(--accent-500)" : "1px solid var(--border-subtle)",
                 }}
               />
             ))}
@@ -2294,7 +2346,7 @@ function InfographicCard({ result, onUpdate }) {
                 width: 24,
                 height: 24,
                 padding: 0,
-                border: "1px solid #E5E7EB",
+                border: "1px solid var(--border-subtle)",
                 borderRadius: "50%",
                 cursor: "pointer",
                 overflow: "hidden",
@@ -2350,7 +2402,7 @@ function InfographicCard({ result, onUpdate }) {
                   background: c,
                   cursor: "pointer",
                   border:
-                    bgColor === c ? "2px solid #4F46E5" : "1px solid #E5E7EB",
+                    bgColor === c ? "2px solid var(--accent-500)" : "1px solid var(--border-subtle)",
                 }}
               />
             ))}
@@ -2363,7 +2415,7 @@ function InfographicCard({ result, onUpdate }) {
                 width: 24,
                 height: 24,
                 padding: 0,
-                border: "1px solid #E5E7EB",
+                border: "1px solid var(--border-subtle)",
                 borderRadius: "6px",
                 cursor: "pointer",
                 overflow: "hidden",
@@ -2395,8 +2447,8 @@ function InfographicCard({ result, onUpdate }) {
                   cursor: "pointer",
                   border:
                     bgGradient?.id === g.id
-                      ? "2px solid #4F46E5"
-                      : "1px solid #E5E7EB",
+                      ? "2px solid var(--accent-500)"
+                      : "1px solid var(--border-subtle)",
                 }}
               />
             ))}
@@ -2422,7 +2474,7 @@ function InfographicCard({ result, onUpdate }) {
                     height: 36,
                     objectFit: "cover",
                     borderRadius: "6px",
-                    border: "1px solid #E5E7EB",
+                    border: "1px solid var(--border-subtle)",
                   }}
                 />
                 <button
@@ -2481,46 +2533,6 @@ function InfographicCard({ result, onUpdate }) {
         </div>
       )}
 
-      {panel === "prompt" && (
-        <div
-          style={{
-            marginTop: "8px",
-            padding: "10px",
-            background: "#F9FAFB",
-            border: "1px solid #E5E7EB",
-            borderRadius: "8px",
-          }}
-        >
-          <textarea
-            className="cr-input"
-            rows={2}
-            value={editPrompt}
-            onChange={(e) => setEditPrompt(e.target.value)}
-            placeholder="Describe the change — e.g. “remove the bottom label”, “add a festive theme”"
-            style={{ resize: "vertical", margin: "0 0 8px", fontSize: "12px" }}
-          />
-          {editError && (
-            <p
-              style={{ fontSize: "11px", color: "#DC2626", margin: "0 0 8px" }}
-            >
-              {editError}
-            </p>
-          )}
-          <button
-            type="button"
-            className="cr-btn-save"
-            style={{
-              background: "#059669",
-              fontSize: "12px",
-              padding: "6px 14px",
-            }}
-            onClick={applyEdit}
-            disabled={isEditing || !editPrompt.trim()}
-          >
-            {isEditing ? "Applying…" : "Apply Edit"}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -2571,7 +2583,7 @@ function ErrBanner({ msg, onDismiss }) {
 function WorkflowModelGeneration({ models }) {
   const wfId = "model-generation";
   const fetcher = useFetcher();
-  const infoFetcher = useFetcher();
+  const igJob = useInfographicJob();
   const [step, setStep] = useState(0);
   const [productType, setProductType] = useState(null);
   const [wearType, setWearType] = useState("full");
@@ -2599,8 +2611,9 @@ function WorkflowModelGeneration({ models }) {
   const [error, setError] = useState(null);
   const [withInfographic, setWithInfographic] = useState(false);
   const [infoDescription, setInfoDescription] = useState("");
-  const [infoStyle, setInfoStyle] = useState("modern");
   const [infoCustomStyle, setInfoCustomStyle] = useState("");
+  const [infoCollage, setInfoCollage] = useState(false);
+  const [infoReferenceUrl, setInfoReferenceUrl] = useState(null);
   const [infographicResult, setInfographicResult] = useState(null);
   const [infographicKeyPoints, setInfographicKeyPoints] = useState([]);
   const [infographicError, setInfographicError] = useState(null);
@@ -2656,16 +2669,16 @@ function WorkflowModelGeneration({ models }) {
   }, [statusFetcher.state, statusFetcher.data]);
 
   useEffect(() => {
-    if (infoFetcher.state === "idle" && infoFetcher.data) {
-      if (infoFetcher.data.results?.length) {
-        setInfographicError(null);
-        setInfographicResult(infoFetcher.data.results);
-        setInfographicKeyPoints(infoFetcher.data.key_points ?? []);
-      } else if (infoFetcher.data.error) {
-        setInfographicError(infoFetcher.data.error);
-      }
+    if (igJob.result) {
+      setInfographicError(null);
+      setInfographicResult(igJob.result.results ?? []);
+      setInfographicKeyPoints(igJob.result.key_points ?? []);
     }
-  }, [infoFetcher.state, infoFetcher.data]);
+  }, [igJob.result]);
+
+  useEffect(() => {
+    if (igJob.error) setInfographicError(igJob.error);
+  }, [igJob.error]);
 
   const addExtra = async (file) => {
     if (!file || extraUrls.length >= 3) return;
@@ -2716,20 +2729,14 @@ function WorkflowModelGeneration({ models }) {
       },
     );
     if (withInfographic && infoDescription.trim()) {
-      infoFetcher.submit(
-        {
-          _action: "infographic-create",
-          product_image_url: frontUrl,
-          description: infoDescription,
-          style: infoStyle,
-          custom_style_prompt: infoCustomStyle,
-        },
-        {
-          method: "POST",
-          action: "/app/studio/create",
-          encType: "application/json",
-        },
-      );
+      igJob.submit({
+        _action: "infographic-create",
+        product_image_url: frontUrl,
+        description: infoDescription,
+        custom_style_prompt: infoCustomStyle,
+        collage: infoCollage,
+        reference_image_url: infoReferenceUrl,
+      });
     }
   };
 
@@ -2752,9 +2759,7 @@ function WorkflowModelGeneration({ models }) {
             }}
             infographicResult={infographicResult}
             infographicLoading={
-              withInfographic &&
-              infoFetcher.state !== "idle" &&
-              !infographicResult
+              withInfographic && igJob.isPending && !infographicResult
             }
             infographicError={infographicError}
             onInfographicUpdate={(idx, url) =>
@@ -2770,9 +2775,9 @@ function WorkflowModelGeneration({ models }) {
             infographicRegenInput={{
               imageUrl: frontUrl,
               keyPoints: infographicKeyPoints,
-              style: infoStyle,
               customStylePrompt: infoCustomStyle,
-              category: "clothing",
+              collage: infoCollage,
+              referenceImageUrl: infoReferenceUrl,
             }}
           />
         </Card>
@@ -2891,7 +2896,7 @@ function WorkflowModelGeneration({ models }) {
                         height="18"
                         viewBox="0 0 24 24"
                         fill="none"
-                        style={{ color: "#9CA3AF" }}
+                        style={{ color: "var(--ink-300)" }}
                       >
                         <path
                           d="M12 5v14M5 12h14"
@@ -2903,7 +2908,7 @@ function WorkflowModelGeneration({ models }) {
                       <span
                         style={{
                           fontSize: "11px",
-                          color: "#9CA3AF",
+                          color: "var(--ink-300)",
                           marginTop: "3px",
                         }}
                       >
@@ -3127,10 +3132,12 @@ function WorkflowModelGeneration({ models }) {
             }}
             description={infoDescription}
             onDescriptionChange={setInfoDescription}
-            style={infoStyle}
-            onStyleChange={setInfoStyle}
             customStyle={infoCustomStyle}
             onCustomStyleChange={setInfoCustomStyle}
+            collage={infoCollage}
+            onCollageChange={setInfoCollage}
+            referenceImageUrl={infoReferenceUrl}
+            onReferenceImageChange={setInfoReferenceUrl}
           />
           <StepNav
             onBack={() => setStep(3)}
@@ -3154,7 +3161,7 @@ function WorkflowModelGeneration({ models }) {
 function WorkflowFlatLay({ models }) {
   const wfId = "flat-lay";
   const fetcher = useFetcher();
-  const infoFetcher = useFetcher();
+  const igJob = useInfographicJob();
   const [step, setStep] = useState(0);
   const [productType, setProductType] = useState(null);
   const [wearType, setWearType] = useState("full");
@@ -3175,15 +3182,15 @@ function WorkflowFlatLay({ models }) {
     aspectRatio: "3:4",
     resolution: "standard",
   });
-  const [fashnModel, setFashnModel] = useState("tryon-v1.6");
   const [result, setResult] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const [pendingSessionId, setPendingSessionId] = useState(null);
   const [error, setError] = useState(null);
   const [withInfographic, setWithInfographic] = useState(false);
   const [infoDescription, setInfoDescription] = useState("");
-  const [infoStyle, setInfoStyle] = useState("modern");
   const [infoCustomStyle, setInfoCustomStyle] = useState("");
+  const [infoCollage, setInfoCollage] = useState(false);
+  const [infoReferenceUrl, setInfoReferenceUrl] = useState(null);
   const [infographicResult, setInfographicResult] = useState(null);
   const [infographicKeyPoints, setInfographicKeyPoints] = useState([]);
   const [infographicError, setInfographicError] = useState(null);
@@ -3236,16 +3243,16 @@ function WorkflowFlatLay({ models }) {
   }, [statusFetcher.state, statusFetcher.data]);
 
   useEffect(() => {
-    if (infoFetcher.state === "idle" && infoFetcher.data) {
-      if (infoFetcher.data.results?.length) {
-        setInfographicError(null);
-        setInfographicResult(infoFetcher.data.results);
-        setInfographicKeyPoints(infoFetcher.data.key_points ?? []);
-      } else if (infoFetcher.data.error) {
-        setInfographicError(infoFetcher.data.error);
-      }
+    if (igJob.result) {
+      setInfographicError(null);
+      setInfographicResult(igJob.result.results ?? []);
+      setInfographicKeyPoints(igJob.result.key_points ?? []);
     }
-  }, [infoFetcher.state, infoFetcher.data]);
+  }, [igJob.result]);
+
+  useEffect(() => {
+    if (igJob.error) setInfographicError(igJob.error);
+  }, [igJob.error]);
 
   const doGenerate = () => {
     const productPrompt = buildProductPrompt(productType, wearType);
@@ -3273,7 +3280,6 @@ function WorkflowFlatLay({ models }) {
         model_gender: selectedModel === "__custom__" ? modelGender : null,
         garment_type: productCat?.garmentType ?? wearType ?? "full",
         clothing_prompt: fullPrompt || null,
-        fashn_model: fashnModel,
         ...settings,
       },
       {
@@ -3283,20 +3289,14 @@ function WorkflowFlatLay({ models }) {
       },
     );
     if (withInfographic && infoDescription.trim()) {
-      infoFetcher.submit(
-        {
-          _action: "infographic-create",
-          product_image_url: flatUrl,
-          description: infoDescription,
-          style: infoStyle,
-          custom_style_prompt: infoCustomStyle,
-        },
-        {
-          method: "POST",
-          action: "/app/studio/create",
-          encType: "application/json",
-        },
-      );
+      igJob.submit({
+        _action: "infographic-create",
+        product_image_url: flatUrl,
+        description: infoDescription,
+        custom_style_prompt: infoCustomStyle,
+        collage: infoCollage,
+        reference_image_url: infoReferenceUrl,
+      });
     }
   };
 
@@ -3320,9 +3320,7 @@ function WorkflowFlatLay({ models }) {
             }}
             infographicResult={infographicResult}
             infographicLoading={
-              withInfographic &&
-              infoFetcher.state !== "idle" &&
-              !infographicResult
+              withInfographic && igJob.isPending && !infographicResult
             }
             infographicError={infographicError}
             onInfographicUpdate={(idx, url) =>
@@ -3338,9 +3336,9 @@ function WorkflowFlatLay({ models }) {
             infographicRegenInput={{
               imageUrl: flatUrl,
               keyPoints: infographicKeyPoints,
-              style: infoStyle,
               customStylePrompt: infoCustomStyle,
-              category: "clothing",
+              collage: infoCollage,
+              referenceImageUrl: infoReferenceUrl,
             }}
           />
         </Card>
@@ -3520,19 +3518,6 @@ function WorkflowFlatLay({ models }) {
                 { value: "ultra", label: "Ultra HD (4096 px)" },
               ]}
             />
-            <CrSelect
-              label="AI Engine"
-              value={fashnModel}
-              onChange={setFashnModel}
-              options={[
-                { value: "tryon-v1.6", label: "Standard (tryon-v1.6)" },
-                { value: "tryon-max", label: "Try-On Max (higher quality)" },
-                {
-                  value: "product-to-model",
-                  label: "Product to Model (best for saree/lehenga drape)",
-                },
-              ]}
-            />
           </div>
           <StepNav onBack={() => setStep(3)} onNext={() => setStep(5)} />
         </Card>
@@ -3556,7 +3541,6 @@ function WorkflowFlatLay({ models }) {
               ["Pose", settings.pose],
               ["Background", settings.background],
               ["Aspect Ratio", settings.aspectRatio],
-              ["AI Engine", fashnModel],
             ]}
           />
           <InfographicAddon
@@ -3567,10 +3551,12 @@ function WorkflowFlatLay({ models }) {
             }}
             description={infoDescription}
             onDescriptionChange={setInfoDescription}
-            style={infoStyle}
-            onStyleChange={setInfoStyle}
             customStyle={infoCustomStyle}
             onCustomStyleChange={setInfoCustomStyle}
+            collage={infoCollage}
+            onCollageChange={setInfoCollage}
+            referenceImageUrl={infoReferenceUrl}
+            onReferenceImageChange={setInfoReferenceUrl}
           />
           <StepNav
             onBack={() => setStep(4)}
@@ -3594,7 +3580,7 @@ function WorkflowFlatLay({ models }) {
 function WorkflowMannequin({ models }) {
   const wfId = "mannequin";
   const fetcher = useFetcher();
-  const infoFetcher = useFetcher();
+  const igJob = useInfographicJob();
   const [step, setStep] = useState(0);
   const [productType, setProductType] = useState(null);
   const [wearType, setWearType] = useState("full");
@@ -3614,8 +3600,9 @@ function WorkflowMannequin({ models }) {
   const [error, setError] = useState(null);
   const [withInfographic, setWithInfographic] = useState(false);
   const [infoDescription, setInfoDescription] = useState("");
-  const [infoStyle, setInfoStyle] = useState("modern");
   const [infoCustomStyle, setInfoCustomStyle] = useState("");
+  const [infoCollage, setInfoCollage] = useState(false);
+  const [infoReferenceUrl, setInfoReferenceUrl] = useState(null);
   const [infographicResult, setInfographicResult] = useState(null);
   const [infographicKeyPoints, setInfographicKeyPoints] = useState([]);
   const [infographicError, setInfographicError] = useState(null);
@@ -3668,16 +3655,16 @@ function WorkflowMannequin({ models }) {
   }, [statusFetcher.state, statusFetcher.data]);
 
   useEffect(() => {
-    if (infoFetcher.state === "idle" && infoFetcher.data) {
-      if (infoFetcher.data.results?.length) {
-        setInfographicError(null);
-        setInfographicResult(infoFetcher.data.results);
-        setInfographicKeyPoints(infoFetcher.data.key_points ?? []);
-      } else if (infoFetcher.data.error) {
-        setInfographicError(infoFetcher.data.error);
-      }
+    if (igJob.result) {
+      setInfographicError(null);
+      setInfographicResult(igJob.result.results ?? []);
+      setInfographicKeyPoints(igJob.result.key_points ?? []);
     }
-  }, [infoFetcher.state, infoFetcher.data]);
+  }, [igJob.result]);
+
+  useEffect(() => {
+    if (igJob.error) setInfographicError(igJob.error);
+  }, [igJob.error]);
 
   const doGenerate = () => {
     setError(null);
@@ -3703,20 +3690,14 @@ function WorkflowMannequin({ models }) {
       },
     );
     if (withInfographic && infoDescription.trim()) {
-      infoFetcher.submit(
-        {
-          _action: "infographic-create",
-          product_image_url: mannUrl,
-          description: infoDescription,
-          style: infoStyle,
-          custom_style_prompt: infoCustomStyle,
-        },
-        {
-          method: "POST",
-          action: "/app/studio/create",
-          encType: "application/json",
-        },
-      );
+      igJob.submit({
+        _action: "infographic-create",
+        product_image_url: mannUrl,
+        description: infoDescription,
+        custom_style_prompt: infoCustomStyle,
+        collage: infoCollage,
+        reference_image_url: infoReferenceUrl,
+      });
     }
   };
 
@@ -3739,9 +3720,7 @@ function WorkflowMannequin({ models }) {
             }}
             infographicResult={infographicResult}
             infographicLoading={
-              withInfographic &&
-              infoFetcher.state !== "idle" &&
-              !infographicResult
+              withInfographic && igJob.isPending && !infographicResult
             }
             infographicError={infographicError}
             onInfographicUpdate={(idx, url) =>
@@ -3757,9 +3736,9 @@ function WorkflowMannequin({ models }) {
             infographicRegenInput={{
               imageUrl: mannUrl,
               keyPoints: infographicKeyPoints,
-              style: infoStyle,
               customStylePrompt: infoCustomStyle,
-              category: "clothing",
+              collage: infoCollage,
+              referenceImageUrl: infoReferenceUrl,
             }}
           />
         </Card>
@@ -3930,10 +3909,12 @@ function WorkflowMannequin({ models }) {
             }}
             description={infoDescription}
             onDescriptionChange={setInfoDescription}
-            style={infoStyle}
-            onStyleChange={setInfoStyle}
             customStyle={infoCustomStyle}
             onCustomStyleChange={setInfoCustomStyle}
+            collage={infoCollage}
+            onCollageChange={setInfoCollage}
+            referenceImageUrl={infoReferenceUrl}
+            onReferenceImageChange={setInfoReferenceUrl}
           />
           <StepNav
             onBack={() => setStep(3)}
@@ -3959,7 +3940,7 @@ function WorkflowAccessories({ models }) {
 
   // All hooks must be unconditional ─────────────────────────────────────────
   const fetcher = useFetcher(); // Fashn AI try-on
-  const infoFetcher = useFetcher(); // infographic addon
+  const igJob = useInfographicJob(); // infographic addon
 
   const [step, setStep] = useState(0);
   const [productType, setProductType] = useState(null);
@@ -3981,8 +3962,9 @@ function WorkflowAccessories({ models }) {
   const [error, setError] = useState(null);
   const [withInfographic, setWithInfographic] = useState(false);
   const [infoDescription, setInfoDescription] = useState("");
-  const [infoStyle, setInfoStyle] = useState("modern");
   const [infoCustomStyle, setInfoCustomStyle] = useState("");
+  const [infoCollage, setInfoCollage] = useState(false);
+  const [infoReferenceUrl, setInfoReferenceUrl] = useState(null);
   const [infographicResult, setInfographicResult] = useState(null);
   const [infographicKeyPoints, setInfographicKeyPoints] = useState([]);
   const [infographicError, setInfographicError] = useState(null);
@@ -4040,16 +4022,16 @@ function WorkflowAccessories({ models }) {
   }, [statusFetcher.state, statusFetcher.data]);
 
   useEffect(() => {
-    if (infoFetcher.state === "idle" && infoFetcher.data) {
-      if (infoFetcher.data.results?.length) {
-        setInfographicError(null);
-        setInfographicResult(infoFetcher.data.results);
-        setInfographicKeyPoints(infoFetcher.data.key_points ?? []);
-      } else if (infoFetcher.data.error) {
-        setInfographicError(infoFetcher.data.error);
-      }
+    if (igJob.result) {
+      setInfographicError(null);
+      setInfographicResult(igJob.result.results ?? []);
+      setInfographicKeyPoints(igJob.result.key_points ?? []);
     }
-  }, [infoFetcher.state, infoFetcher.data]);
+  }, [igJob.result]);
+
+  useEffect(() => {
+    if (igJob.error) setInfographicError(igJob.error);
+  }, [igJob.error]);
 
   // ── Submit handlers ───────────────────────────────────────────────────────
   const doModelGenerate = () => {
@@ -4077,20 +4059,14 @@ function WorkflowAccessories({ models }) {
       },
     );
     if (withInfographic && infoDescription.trim()) {
-      infoFetcher.submit(
-        {
-          _action: "infographic-create",
-          product_image_url: accUrl,
-          description: infoDescription,
-          style: infoStyle,
-          custom_style_prompt: infoCustomStyle,
-        },
-        {
-          method: "POST",
-          action: "/app/studio/create",
-          encType: "application/json",
-        },
-      );
+      igJob.submit({
+        _action: "infographic-create",
+        product_image_url: accUrl,
+        description: infoDescription,
+        custom_style_prompt: infoCustomStyle,
+        collage: infoCollage,
+        reference_image_url: infoReferenceUrl,
+      });
     }
   };
 
@@ -4123,9 +4099,7 @@ function WorkflowAccessories({ models }) {
             }}
             infographicResult={infographicResult}
             infographicLoading={
-              withInfographic &&
-              infoFetcher.state !== "idle" &&
-              !infographicResult
+              withInfographic && igJob.isPending && !infographicResult
             }
             infographicError={infographicError}
             onInfographicUpdate={(idx, url) =>
@@ -4141,9 +4115,9 @@ function WorkflowAccessories({ models }) {
             infographicRegenInput={{
               imageUrl: accUrl,
               keyPoints: infographicKeyPoints,
-              style: infoStyle,
               customStylePrompt: infoCustomStyle,
-              category: "clothing",
+              collage: infoCollage,
+              referenceImageUrl: infoReferenceUrl,
             }}
           />
         </Card>
@@ -4341,10 +4315,12 @@ function WorkflowAccessories({ models }) {
             }}
             description={infoDescription}
             onDescriptionChange={setInfoDescription}
-            style={infoStyle}
-            onStyleChange={setInfoStyle}
             customStyle={infoCustomStyle}
             onCustomStyleChange={setInfoCustomStyle}
+            collage={infoCollage}
+            onCollageChange={setInfoCollage}
+            referenceImageUrl={infoReferenceUrl}
+            onReferenceImageChange={setInfoReferenceUrl}
           />
           <StepNav
             onBack={() => setStep(4)}
@@ -4365,54 +4341,66 @@ function WorkflowAccessories({ models }) {
 // WORKFLOW 5 — MARKETING INFOGRAPHIC (standalone)
 // ════════════════════════════════════════════════════════════════════════════
 
-function WorkflowInfographic({ savedGenerations }) {
-  const igFetcher = useFetcher();
+function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
+  const igJob = useInfographicJob();
+  const reindexFetcher = useFetcher();
 
   const [useUpload, setUseUpload] = useState(savedGenerations.length === 0);
   const [igStep, setIgStep] = useState(0);
   const [igImageUrl, setIgImageUrl] = useState(null);
   const [igDesc, setIgDesc] = useState("");
-  const [igStyle, setIgStyle] = useState("luxury");
-  const [igCategory, setIgCategory] = useState("clothing");
+  // RAG grounding — picking a product lets InfographicController extract key
+  // points from its real title/vendor/type/tags/description instead of only
+  // this free-text box (see docs/rag-qdrant-implementation-plan.md).
+  const [igProductId, setIgProductId] = useState(null);
+  const [igProductQuery, setIgProductQuery] = useState("");
+  const [igSize, setIgSize] = useState("portrait");
+  const [igCollage, setIgCollage] = useState(false);
+  const [igReferenceUrl, setIgReferenceUrl] = useState(null);
   const [igCustomStyle, setIgCustomStyle] = useState("");
   const [igResults, setIgResults] = useState(null);
   const [igKPs, setIgKPs] = useState([]);
+  const [igArchetype, setIgArchetype] = useState(null);
+  const [igQuality, setIgQuality] = useState(null);
   const [igError, setIgError] = useState(null);
 
   useEffect(() => {
-    if (igFetcher.state === "idle" && igFetcher.data) {
-      if (igFetcher.data.results?.length) {
-        setIgResults(igFetcher.data.results);
-        setIgKPs(igFetcher.data.key_points ?? []);
-        setIgStep(4);
-      } else if (igFetcher.data.error) {
-        setIgError(igFetcher.data.error);
-        setIgStep(3); // back to review
-      }
+    if (igJob.result) {
+      setIgResults(igJob.result.results ?? []);
+      setIgKPs(igJob.result.key_points ?? []);
+      setIgArchetype(igJob.result.archetype ?? null);
+      setIgQuality(igJob.result.quality ?? null);
+      setIgStep(4);
     }
-  }, [igFetcher.state, igFetcher.data]);
+  }, [igJob.result]);
+
+  useEffect(() => {
+    if (igJob.error) {
+      setIgError(igJob.error);
+      setIgStep(3); // back to review
+    }
+  }, [igJob.error]);
 
   const doIgGenerate = () => {
     setIgError(null);
-    igFetcher.submit(
-      {
-        _action: "infographic-create",
-        product_image_url: igImageUrl,
-        description: igDesc,
-        style: igStyle,
-        custom_style_prompt: igCustomStyle,
-        product_category: igCategory,
-      },
-      {
-        method: "POST",
-        action: "/app/studio/create",
-        encType: "application/json",
-      },
-    );
+    igJob.submit({
+      _action: "infographic-create",
+      product_image_url: igImageUrl,
+      description: igDesc,
+      // No style/category to send — the PHP side looks at igImageUrl
+      // itself (gpt-4o-mini vision) and picks whichever real design
+      // archetype suits it. custom_style_prompt is still an optional
+      // free-text nudge on top of that.
+      custom_style_prompt: igCustomStyle,
+      size: igSize,
+      collage: igCollage,
+      reference_image_url: igReferenceUrl,
+      product_id: igProductId,
+    });
   };
 
-  const igSteps = ["Source Image", "Description", "Style", "Review", "Output"];
-  const isIgGenerating = igFetcher.state !== "idle";
+  const igSteps = ["Source Image", "Description", "Options", "Review", "Output"];
+  const isIgGenerating = igJob.isPending;
   const fmt = (d) =>
     d
       ? new Date(d).toLocaleDateString("en-US", {
@@ -4451,11 +4439,90 @@ function WorkflowInfographic({ savedGenerations }) {
             infographicRegenInput={{
               imageUrl: igImageUrl,
               keyPoints: igKPs,
-              style: igStyle,
               customStylePrompt: igCustomStyle,
-              category: igCategory,
+              size: igSize,
+              collage: igCollage,
+              referenceImageUrl: igReferenceUrl,
             }}
           />
+          {igArchetype?.name && (
+            <div
+              style={{
+                marginTop: "16px",
+                padding: "10px 14px",
+                background: "var(--accent-50)",
+                borderRadius: "10px",
+                border: "1px solid #E0E7FF",
+                fontSize: "12px",
+                color: "var(--accent-600)",
+              }}
+            >
+              {igArchetype.id === "reference-match" ? (
+                <>AI replicated the design from your reference image.</>
+              ) : (
+                <>
+                  AI matched this photo to the{" "}
+                  <strong>{igArchetype.name}</strong> design
+                  {igArchetype.category ? ` (${igArchetype.category})` : ""} —
+                  picked automatically from the photo itself.
+                </>
+              )}
+            </div>
+          )}
+          {igQuality?.checked &&
+            ((igQuality.overall_score ?? 10) < 8 ||
+              igQuality.issues?.length > 0) && (
+              <div
+                style={{
+                  marginTop: "16px",
+                  padding: "10px 14px",
+                  background: "#FFFBEB",
+                  borderRadius: "10px",
+                  border: "1px solid #FDE68A",
+                  fontSize: "12px",
+                  color: "#92400E",
+                }}
+              >
+                <p style={{ fontWeight: 700, margin: "0 0 6px" }}>
+                  AI quality check
+                  {typeof igQuality.overall_score === "number"
+                    ? `: ${igQuality.overall_score}/10`
+                    : ""}{" "}
+                  — already auto-retried once server-side; consider
+                  Regenerating again if it still isn&apos;t right:
+                </p>
+                {igQuality.issues?.length > 0 && (
+                  <ul style={{ margin: "0 0 6px", paddingLeft: "18px" }}>
+                    {igQuality.issues.map((issue, i) => (
+                      <li key={i}>{issue}</li>
+                    ))}
+                  </ul>
+                )}
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "8px",
+                    fontSize: "11px",
+                  }}
+                >
+                  {[
+                    ["Product focus", igQuality.product_dominance],
+                    ["Readability", igQuality.text_readability],
+                    ["Density", igQuality.information_density],
+                    ["Layout", igQuality.layout_quality],
+                    ["Hierarchy", igQuality.visual_hierarchy],
+                    ["Category fit", igQuality.category_accuracy],
+                  ]
+                    .filter(([, v]) => typeof v === "number")
+                    .map(([label, v]) => (
+                      <span key={label}>
+                        {label}: {v}/10
+                      </span>
+                    ))}
+                </div>
+              </div>
+            )}
           {igKPs.length > 0 && (
             <div
               style={{
@@ -4528,30 +4595,44 @@ function WorkflowInfographic({ savedGenerations }) {
           {savedGenerations.length > 0 && !useUpload && (
             <div style={{ marginBottom: "16px" }}>
               <FieldLabel required>Saved Fashn AI Models</FieldLabel>
-              <select
-                className="cr-input"
-                style={{ cursor: "pointer" }}
-                value={igImageUrl ?? ""}
-                onChange={(e) => setIgImageUrl(e.target.value || null)}
-              >
-                <option value="" disabled>
-                  Select a saved model photo…
-                </option>
-                {savedGenerations.map((g) => (
-                  <option key={g.id} value={g.result_image_url}>
-                    {g.garment_type
-                      ? g.garment_type.charAt(0).toUpperCase() +
-                        g.garment_type.slice(1)
-                      : "Model"}{" "}
-                    — {fmt(g.created_at)}
-                  </option>
-                ))}
-              </select>
-              {igImageUrl && (
-                <div style={{ marginTop: "12px" }}>
-                  <ReviewThumb label="Selected" src={igImageUrl} />
-                </div>
-              )}
+              <div className="cr-model-grid">
+                {savedGenerations.map((g) => {
+                  const sel = igImageUrl === g.result_image_url;
+                  const label = g.garment_type
+                    ? g.garment_type.charAt(0).toUpperCase() +
+                      g.garment_type.slice(1)
+                    : "Model";
+                  return (
+                    <div
+                      key={g.id}
+                      className={`cr-model-card ${sel ? "selected" : ""}`}
+                      title={`${label} — ${fmt(g.created_at)}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setIgImageUrl(g.result_image_url)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setIgImageUrl(g.result_image_url);
+                        }
+                      }}
+                    >
+                      <div className="cr-model-thumb">
+                        <img
+                          src={g.result_image_url}
+                          alt={label}
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                          }}
+                        />
+                        {sel && <div className="cr-model-tick">✓</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -4563,7 +4644,7 @@ function WorkflowInfographic({ savedGenerations }) {
                   border: "none",
                   padding: 0,
                   marginTop: "10px",
-                  color: "#4F46E5",
+                  color: "var(--accent-500)",
                   fontSize: "12px",
                   fontWeight: 600,
                   cursor: "pointer",
@@ -4606,7 +4687,7 @@ function WorkflowInfographic({ savedGenerations }) {
                     border: "none",
                     padding: 0,
                     marginTop: "6px",
-                    color: "#4F46E5",
+                    color: "var(--accent-500)",
                     fontSize: "12px",
                     fontWeight: 600,
                     cursor: "pointer",
@@ -4625,15 +4706,167 @@ function WorkflowInfographic({ savedGenerations }) {
 
       {igStep === 1 && (
         <Card>
+          <SectionTitle>Ground It in a Real Product</SectionTitle>
+          <SectionDesc>
+            Pick one of your synced products so AI extracts highlights from its
+            actual title, vendor, type, tags and description — instead of only
+            guessing from free text. Picking a product is optional; the
+            description box below still works on its own.
+          </SectionDesc>
+
+          {ragStatus?.enabled ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "10px",
+                padding: "10px 12px",
+                marginBottom: "14px",
+                background: "#F0FDF4",
+                border: "1px solid #D1FAE5",
+                borderRadius: "8px",
+                fontSize: "12px",
+                color: "#065F46",
+              }}
+            >
+              <span>
+                Product knowledge index:{" "}
+                <strong>{ragStatus.indexed_products}</strong> product
+                {ragStatus.indexed_products === 1 ? "" : "s"}
+                {ragStatus.last_indexed_at
+                  ? ` · last updated ${fmt(ragStatus.last_indexed_at)}`
+                  : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  reindexFetcher.submit(
+                    { _action: "rag-reindex" },
+                    {
+                      method: "POST",
+                      action: "/app/studio/create",
+                      encType: "application/json",
+                    },
+                  )
+                }
+                disabled={reindexFetcher.state !== "idle"}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#065F46",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                  fontSize: "12px",
+                }}
+              >
+                {reindexFetcher.state !== "idle" ? "Re-indexing…" : "Re-index"}
+              </button>
+            </div>
+          ) : null}
+
+          {products.length > 0 && (
+            <div style={{ marginBottom: "18px" }}>
+              <FieldLabel hint="optional — grounds the AI in this product's real facts">
+                Product
+              </FieldLabel>
+              {igProductId ? (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "10px 12px",
+                    border: "1px solid var(--vto-border, var(--border-subtle))",
+                    borderRadius: "8px",
+                    background: "#F8FAFC",
+                  }}
+                >
+                  <span style={{ fontSize: "13px", fontWeight: 600 }}>
+                    {products.find((p) => String(p.id) === String(igProductId))
+                      ?.title ?? `Product #${igProductId}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIgProductId(null)}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: "#64748B",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                    }}
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={igProductQuery}
+                    onChange={(e) => setIgProductQuery(e.target.value)}
+                    placeholder="Search your products…"
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      border: "1px solid var(--vto-border, var(--border-subtle))",
+                      borderRadius: "8px",
+                      fontSize: "13px",
+                      marginBottom: "6px",
+                    }}
+                  />
+                  <div
+                    style={{
+                      maxHeight: "180px",
+                      overflowY: "auto",
+                      border: "1px solid var(--vto-border, var(--border-subtle))",
+                      borderRadius: "8px",
+                    }}
+                  >
+                    {products
+                      .filter((p) =>
+                        (p.title ?? "")
+                          .toLowerCase()
+                          .includes(igProductQuery.trim().toLowerCase()),
+                      )
+                      .slice(0, 25)
+                      .map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setIgProductId(p.id)}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 12px",
+                            border: "none",
+                            borderBottom: "1px solid var(--surface-2)",
+                            background: "white",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                          }}
+                        >
+                          {p.title || `Product #${p.id}`}
+                        </button>
+                      ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <SectionTitle>Describe Your Product</SectionTitle>
           <SectionDesc>
-            Write a short paragraph about the product. AI will extract 3–4 short
-            highlights — no full sentences — and overlay them as bold badges on
-            the infographic.
+            {igProductId
+              ? "Optional — add any extra notes AI should consider alongside the selected product's real facts."
+              : "Write a short paragraph about the product. AI will extract 3–4 short highlights — no full sentences — and overlay them as bold badges on the infographic."}
           </SectionDesc>
           <CrTextarea
             label="Product Description"
-            required
+            required={!igProductId}
             value={igDesc}
             onChange={setIgDesc}
             rows={5}
@@ -4642,7 +4875,7 @@ function WorkflowInfographic({ savedGenerations }) {
           <p
             style={{
               fontSize: "12px",
-              color: "#6B7280",
+              color: "var(--ink-500)",
               margin: "-4px 0 0",
               lineHeight: 1.5,
             }}
@@ -4655,94 +4888,69 @@ function WorkflowInfographic({ savedGenerations }) {
           <StepNav
             onBack={() => setIgStep(0)}
             onNext={() => setIgStep(2)}
-            nextDisabled={!igDesc.trim()}
+            nextDisabled={!igDesc.trim() && !igProductId}
           />
         </Card>
       )}
 
       {igStep === 2 && (
         <Card>
-          <SectionTitle>Choose Infographic Style</SectionTitle>
-          <SectionDesc>Pick the visual theme for your infographic.</SectionDesc>
+          <SectionTitle>Output Options</SectionTitle>
+          <SectionDesc>
+            AI looks at your product photo itself and picks whichever real
+            design layout suits it — no style or product-type picker needed.
+            These options control the output format only.
+          </SectionDesc>
           <div style={{ marginBottom: "18px" }}>
-            <FieldLabel hint="changes how labels are laid out around your photo">
-              Product Type
+            <FieldLabel hint="output image dimensions">Output Size</FieldLabel>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+              {SIZE_OPTIONS.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={`cr-choice-btn ${igSize === s.id ? "active" : ""}`}
+                  onClick={() => setIgSize(s.id)}
+                  title={s.desc}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginBottom: "18px" }}>
+            <FieldLabel hint="4 matching hero, detail-zoom & feature shots instead of one image">
+              Layout
             </FieldLabel>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               <button
                 type="button"
-                className={`cr-choice-btn ${igCategory === "clothing" ? "active" : ""}`}
-                onClick={() => setIgCategory("clothing")}
+                className={`cr-choice-btn ${!igCollage ? "active" : ""}`}
+                onClick={() => setIgCollage(false)}
               >
-                Clothing / Apparel
+                Single Infographic
               </button>
               <button
                 type="button"
-                className={`cr-choice-btn ${igCategory === "food" ? "active" : ""}`}
-                onClick={() => setIgCategory("food")}
+                className={`cr-choice-btn ${igCollage ? "active" : ""}`}
+                disabled={!!igReferenceUrl}
+                onClick={() => setIgCollage(true)}
               >
-                Food / Packaged Goods
+                Multi-Panel Collage (4 images)
               </button>
             </div>
           </div>
-          <div className="cr-template-list">
-            {TEMPLATES.map((t) => (
-              <div
-                key={t.id}
-                className={`cr-template-row ${igStyle === t.id ? "selected" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => setIgStyle(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setIgStyle(t.id);
-                  }
-                }}
-              >
-                <div
-                  className="cr-template-dot"
-                  style={{
-                    background:
-                      t.id === "luxury"
-                        ? "#B48C32"
-                        : t.id === "modern"
-                          ? "#2563EB"
-                          : t.id === "minimal"
-                            ? "#E5E7EB"
-                            : t.id === "ecommerce"
-                              ? "#059669"
-                              : t.id === "catalog"
-                                ? "#334155"
-                                : t.id === "collage"
-                                  ? "#EC4899"
-                                  : "#6366F1",
-                  }}
-                />
-                <div style={{ flex: 1 }}>
-                  <p
-                    style={{
-                      fontWeight: 600,
-                      fontSize: "13px",
-                      color: "#111827",
-                      margin: "0 0 2px",
-                    }}
-                  >
-                    {t.label}
-                  </p>
-                  <p style={{ fontSize: "12px", color: "#6B7280", margin: 0 }}>
-                    {t.desc}
-                  </p>
-                </div>
-                <div
-                  className={`cr-template-check ${igStyle === t.id ? "visible" : ""}`}
-                >
-                  ✓
-                </div>
-              </div>
-            ))}
+          <div style={{ marginBottom: "18px" }}>
+            <FieldLabel hint="optional — upload an example infographic to replicate its exact design instead of AI auto-picking one">
+              Match a Reference Design
+            </FieldLabel>
+            <UploadZone
+              compact
+              value={igReferenceUrl}
+              onChange={setIgReferenceUrl}
+              note="If set, this overrides auto-detection and disables Collage — the layout, palette, and label style are copied from this image."
+            />
           </div>
-          <div style={{ marginTop: "16px" }}>
+          <div>
             <FieldLabel hint="optional — describe how you want the background/theme to look">
               Custom Background / Theme
             </FieldLabel>
@@ -4755,11 +4963,7 @@ function WorkflowInfographic({ savedGenerations }) {
               style={{ resize: "vertical", lineHeight: 1.5, margin: 0 }}
             />
           </div>
-          <StepNav
-            onBack={() => setIgStep(1)}
-            onNext={() => setIgStep(3)}
-            nextDisabled={!igStyle}
-          />
+          <StepNav onBack={() => setIgStep(1)} onNext={() => setIgStep(3)} />
         </Card>
       )}
 
@@ -4779,6 +4983,9 @@ function WorkflowInfographic({ savedGenerations }) {
             }}
           >
             <ReviewThumb label="Source" src={igImageUrl} />
+            {igReferenceUrl && (
+              <ReviewThumb label="Reference" src={igReferenceUrl} />
+            )}
             <div style={{ flex: 1, minWidth: "180px" }}>
               <ReviewTable
                 rows={[
@@ -4787,14 +4994,22 @@ function WorkflowInfographic({ savedGenerations }) {
                     useUpload ? "Uploaded image" : "Saved Fashn AI model",
                   ],
                   [
-                    "Product Type",
-                    igCategory === "food"
-                      ? "Food / Packaged Goods"
-                      : "Clothing / Apparel",
+                    "Design",
+                    igReferenceUrl
+                      ? "Matched to reference image"
+                      : "Auto-detected from the photo",
                   ],
                   [
-                    "Style",
-                    TEMPLATES.find((t) => t.id === igStyle)?.label ?? igStyle,
+                    "Layout",
+                    igReferenceUrl
+                      ? "Single Infographic (reference mode)"
+                      : igCollage
+                        ? "Multi-Panel Collage (4 images)"
+                        : "Single Infographic",
+                  ],
+                  [
+                    "Output Size",
+                    SIZE_OPTIONS.find((s) => s.id === igSize)?.label ?? igSize,
                   ],
                   [
                     "Background",
@@ -4813,8 +5028,8 @@ function WorkflowInfographic({ savedGenerations }) {
           <p
             style={{
               fontSize: "12px",
-              color: "#6B7280",
-              background: "#F9FAFB",
+              color: "var(--ink-500)",
+              background: "var(--surface-2)",
               padding: "10px 12px",
               borderRadius: "8px",
               margin: "0 0 4px",
@@ -4978,29 +5193,16 @@ function WorkflowSelector({ onSelect }) {
             >
               {/* Image area */}
               <div className="cr-wf-img">
-                <div
-                  className="cr-wf-img-ring"
-                  style={{ borderColor: `${col.accent}28` }}
-                />
-                <div
-                  className="cr-wf-img-ring cr-wf-img-ring2"
-                  style={{ borderColor: `${col.accent}14` }}
-                />
+                <span className="cr-wf-num-tag">{WF_NUMBERS[idx]}</span>
                 <div
                   className="cr-wf-img-icon"
                   style={{
-                    background: isHov ? col.accent : "rgba(255,255,255,0.92)",
+                    background: isHov ? col.accent : col.light,
                     color: isHov ? "#fff" : col.accent,
                   }}
                 >
                   {WF_ICONS[wf.id]}
                 </div>
-                <span
-                  className="cr-wf-num-tag"
-                  style={{ background: col.accent }}
-                >
-                  {WF_NUMBERS[idx]}
-                </span>
               </div>
 
               {/* Text content */}
@@ -5008,10 +5210,7 @@ function WorkflowSelector({ onSelect }) {
                 <h3 className="cr-wf-card-title">{wf.title}</h3>
                 <p className="cr-wf-card-desc">{wf.desc}</p>
                 <div className="cr-wf-badges">
-                  <span
-                    className="cr-wf-badge"
-                    style={{ background: col.light, color: col.accent }}
-                  >
+                  <span className="cr-wf-badge">
                     <svg
                       width="10"
                       height="10"
@@ -5039,20 +5238,15 @@ function WorkflowSelector({ onSelect }) {
                     </svg>
                     {col.time}
                   </span>
-                  <span
-                    className="cr-wf-badge"
-                    style={{ background: col.light, color: col.accent }}
-                  >
-                    {wf.steps.length} steps
-                  </span>
+                  <span className="cr-wf-badge">{wf.steps.length} steps</span>
                 </div>
                 <button
-                  className="cr-wf-cta"
-                  style={{
-                    background: isHov ? col.accent : "transparent",
-                    color: isHov ? "#fff" : col.accent,
-                    borderColor: col.accent,
-                  }}
+                  className={`cr-wf-cta ${isHov ? "hover" : ""}`}
+                  style={
+                    isHov
+                      ? { background: col.accent, borderColor: col.accent }
+                      : {}
+                  }
                 >
                   Start workflow
                   <svg
@@ -5083,20 +5277,15 @@ function WorkflowSelector({ onSelect }) {
 // ── Page root ─────────────────────────────────────────────────────────────────
 
 export default function CreatePage() {
-  const { models, savedGenerations } = useLoaderData();
+  const { models, savedGenerations, products, ragStatus } = useLoaderData();
   const navigate = useNavigate();
   const [phase, setPhase] = useState("select");
   const [wfType, setWfType] = useState(null);
   const wf = WORKFLOWS.find((w) => w.id === wfType);
-  const col = WF_COLORS[wfType] ?? {
-    accent: "#4F46E5",
-    light: "#EEF2FF",
-    dark: "#4338CA",
-  };
+  const col = WF_COLORS[wfType] ?? BRAND;
 
   return (
     <>
-      <style>{CSS}</style>
       <div className="cr-page">
         {/* Header */}
         <div
@@ -5169,7 +5358,11 @@ export default function CreatePage() {
             <WorkflowAccessories models={models} />
           )}
           {phase === "workflow" && wfType === "infographic" && (
-            <WorkflowInfographic savedGenerations={savedGenerations} />
+            <WorkflowInfographic
+              savedGenerations={savedGenerations}
+              products={products}
+              ragStatus={ragStatus}
+            />
           )}
         </div>
       </div>
@@ -5177,295 +5370,3 @@ export default function CreatePage() {
   );
 }
 
-// ── CSS ───────────────────────────────────────────────────────────────────────
-
-const CSS = `
-@keyframes cr-spin    { to { transform:rotate(360deg); } }
-@keyframes cr-float   { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
-@keyframes cr-confetti{ 0%{transform:translateY(0) scale(1);opacity:1} 100%{transform:translateY(-28px) scale(0.6);opacity:0} }
-@keyframes cr-shimmer { 0%{background-position:200% center} 100%{background-position:-200% center} }
-@keyframes cr-bar-in  { from{width:0} }
-
-/* ─── Page shell ──────────────────────────────────────────────────────────── */
-.cr-page { max-width:860px; margin:0 auto; padding:0 0 80px; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#111827; background:#F8FAFC; min-height:100vh; }
-.cr-body { padding:0 20px; }
-
-/* ─── Page header ─────────────────────────────────────────────────────────── */
-.cr-page-hdr { display:flex; align-items:center; padding:16px 20px; background:#fff; border-bottom:1px solid #E5E7EB; margin-bottom:24px; gap:12px; }
-.cr-back { display:inline-flex; align-items:center; font-family:inherit; font-size:13px; font-weight:500; color:#6B7280; background:none; border:none; cursor:pointer; padding:7px 12px; border-radius:8px; transition:all 0.15s; }
-.cr-back:hover { background:#F3F4F6; color:#374151; }
-.cr-page-title { font-size:17px; font-weight:700; color:#111827; margin:0; letter-spacing:-0.2px; }
-.cr-page-sub   { font-size:12px; font-weight:600; margin:2px 0 0; }
-
-/* ─── Workflow selector ───────────────────────────────────────────────────── */
-.cr-sel-hero { text-align:center; padding:32px 20px 24px; }
-.cr-sel-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#9CA3AF; margin:0 0 8px; }
-.cr-sel-title { font-size:24px; font-weight:800; color:#111827; margin:0 0 8px; letter-spacing:-0.4px; }
-.cr-sel-sub   { font-size:14px; color:#6B7280; margin:0; }
-
-.cr-wf-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:0 0 24px; }
-@media(max-width:700px){ .cr-wf-grid{grid-template-columns:repeat(2,1fr);} }
-@media(max-width:420px){ .cr-wf-grid{grid-template-columns:1fr;} }
-
-.cr-wf-card {
-  background:#fff; border-radius:16px; overflow:hidden;
-  cursor:pointer; position:relative; border:1.5px solid #E5E7EB;
-  display:flex; flex-direction:column;
-  transition:transform 0.18s, box-shadow 0.18s, border-color 0.18s;
-}
-.cr-wf-card:hover { transform:translateY(-4px); box-shadow:0 16px 40px rgba(0,0,0,0.12); border-color:var(--accent); }
-
-/* ─── Card image area ─────────────────────────────────────────────────────── */
-.cr-wf-img { height:140px; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; background:var(--light); }
-.cr-wf-img-icon { width:60px; height:60px; border-radius:16px; display:flex; align-items:center; justify-content:center; transition:all 0.2s; z-index:1; position:relative; box-shadow:0 4px 16px rgba(0,0,0,0.08); }
-.cr-wf-img-icon svg { width:28px; height:28px; }
-.cr-wf-img-ring { position:absolute; width:88px; height:88px; border-radius:50%; border:1.5px solid; pointer-events:none; }
-.cr-wf-img-ring2 { width:126px; height:126px; }
-.cr-wf-num-tag { position:absolute; top:10px; left:10px; font-size:10px; font-weight:800; color:#fff; padding:2px 8px; border-radius:20px; letter-spacing:0.04em; z-index:2; }
-
-/* ─── Card text content ───────────────────────────────────────────────────── */
-.cr-wf-content { padding:14px 14px 14px; display:flex; flex-direction:column; flex:1; }
-.cr-wf-card-title { font-size:13px; font-weight:700; color:#111827; margin:0 0 5px; line-height:1.3; }
-.cr-wf-card-desc  { font-size:11px; color:#6B7280; margin:0 0 10px; line-height:1.5; flex:1; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
-.cr-wf-badges { display:flex; gap:4px; margin-bottom:12px; flex-wrap:wrap; }
-.cr-wf-badge { font-size:10px; font-weight:600; padding:2px 7px; border-radius:20px; }
-.cr-wf-cta { display:inline-flex; align-items:center; justify-content:center; font-family:inherit; font-size:12px; font-weight:600; padding:8px 14px; border-radius:8px; border:1.5px solid; cursor:pointer; transition:all 0.18s; width:100%; }
-
-/* ─── Stepper — connected track ───────────────────────────────────────────── */
-.cr-stepper { background:#fff; border-radius:14px; padding:18px 20px 22px; margin-bottom:16px; border:1px solid #E5E7EB; box-shadow:0 1px 4px rgba(0,0,0,0.04); }
-
-/* context row */
-.cr-step-ctx { display:flex; align-items:center; gap:10px; margin-bottom:24px; }
-.cr-step-pill { font-size:11px; font-weight:700; padding:3px 11px; border-radius:20px; flex-shrink:0; letter-spacing:0.02em; }
-.cr-step-curname { font-size:14px; font-weight:700; color:#111827; }
-
-/* track wrapper — padding = half of dot width (28/2 = 14px) so rail centers on dots */
-.cr-track { position:relative; padding:0 14px; }
-
-/* gray rail */
-.cr-rail-bg {
-  position:absolute; top:14px; left:14px; right:14px; height:2px;
-  background:#E5E7EB; border-radius:99px;
-}
-
-/* coloured fill — starts at left:14px (center of first dot) */
-.cr-rail-fill {
-  position:absolute; top:14px; left:14px; height:2px;
-  border-radius:99px; z-index:1;
-  transition:width 0.55s cubic-bezier(.4,0,.2,1);
-}
-
-/* dots row sits on top of the rails */
-.cr-dots { display:flex; justify-content:space-between; position:relative; z-index:2; }
-
-.cr-dot-item { display:flex; flex-direction:column; align-items:center; gap:7px; }
-
-/* dot circles */
-.cr-dot-circle {
-  width:28px; height:28px; border-radius:50%;
-  display:flex; align-items:center; justify-content:center;
-  flex-shrink:0; transition:all 0.25s;
-}
-.cr-dot-circle.idle   { background:#F3F4F6; }
-.cr-dot-circle.done   { background:#10B981; }
-.cr-dot-circle.active { /* colour + shadow set inline */ }
-
-.cr-dot-n { font-size:11px; font-weight:700; color:#9CA3AF; }
-
-/* labels */
-.cr-dot-lbl { font-size:10px; color:#C4C4C4; text-align:center; white-space:nowrap; line-height:1; transition:all 0.2s; }
-.cr-dot-lbl.active { color:#111827; font-weight:700; font-size:11px; }
-.cr-dot-lbl.done   { color:#10B981; font-weight:500; }
-
-@media(max-width:520px){ .cr-dot-lbl { display:none; } }
-
-/* ─── Step card ───────────────────────────────────────────────────────────── */
-.cr-card { background:#fff; border:1px solid #E5E7EB; border-radius:14px; padding:24px; margin-bottom:14px; }
-.cr-card-title { font-size:16px; font-weight:700; color:#111827; margin:0 0 6px; }
-.cr-card-desc  { font-size:13px; color:#6B7280; margin:0 0 20px; line-height:1.5; }
-
-/* ─── Step nav ────────────────────────────────────────────────────────────── */
-.cr-nav { display:flex; align-items:center; margin-top:24px; padding-top:18px; border-top:1px solid #F3F4F6; gap:10px; }
-.cr-gen-wrap { display:flex; flex-direction:column; align-items:flex-end; gap:6px; margin-left:auto; }
-.cr-btn-generate {
-  display:inline-flex; align-items:center; justify-content:center;
-  font-family:inherit; font-size:15px; font-weight:700; color:#fff;
-  padding:13px 32px; border-radius:12px; border:none; cursor:pointer;
-  background:linear-gradient(135deg,#1E1B4B,#111827);
-  box-shadow:0 4px 16px rgba(0,0,0,0.25);
-  transition:all 0.2s;
-  position:relative; overflow:hidden;
-}
-.cr-btn-generate::after {
-  content:""; position:absolute; inset:0;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.08),transparent);
-  background-size:200% 100%;
-  animation:cr-shimmer 2s ease infinite;
-}
-.cr-btn-generate:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 8px 24px rgba(0,0,0,0.3); }
-.cr-btn-generate:disabled { opacity:0.45; cursor:not-allowed; }
-.cr-credit-note { font-size:11px; color:#9CA3AF; margin:0; display:flex; align-items:center; }
-
-/* ─── Upload zone ─────────────────────────────────────────────────────────── */
-.cr-zone { border:2px dashed #D1D5DB; border-radius:12px; background:#FAFAFA; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; transition:all 0.15s; position:relative; overflow:hidden; }
-.cr-zone:hover { border-color:#4F46E5; background:#F5F3FF; }
-.cr-zone.drag   { border-color:#4F46E5; background:#EEF2FF; transform:scale(1.01); }
-.cr-zone.filled { border-style:solid; border-color:#059669; background:#F0FDF4; }
-.cr-zone.errored { border-color:#EF4444; background:#FEF2F2; }
-.cr-zone-bar { position:absolute; bottom:0; left:0; right:0; background:rgba(5,150,105,0.9); padding:5px; text-align:center; font-size:10px; font-weight:700; color:#fff; }
-.cr-field-error { display:flex; align-items:center; gap:6px; font-size:11px; color:#DC2626; background:#FEF2F2; border:1px solid #FECACA; border-radius:6px; padding:6px 10px; margin-top:6px; line-height:1.4; }
-
-/* ─── Req chips ───────────────────────────────────────────────────────────── */
-.cr-req-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px; }
-.cr-req { font-size:11px; font-weight:500; color:#4F46E5; background:#EEF2FF; padding:3px 10px; border-radius:20px; }
-
-/* ─── Model selector ──────────────────────────────────────────────────────── */
-.cr-model-tabs { display:flex; border:1px solid #E5E7EB; border-radius:10px; overflow:hidden; margin-bottom:14px; }
-.cr-model-tab  { flex:1; padding:10px; font-family:inherit; font-size:13px; font-weight:600; color:#6B7280; background:#F9FAFB; border:none; cursor:pointer; transition:all 0.15s; }
-.cr-model-tab.active { background:#111827; color:#fff; }
-.cr-model-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px; }
-@media(max-width:640px){ .cr-model-grid{grid-template-columns:repeat(3,1fr);} }
-@media(max-width:440px){ .cr-model-grid{grid-template-columns:repeat(2,1fr);} }
-.cr-model-card { border:1.5px solid #E5E7EB; border-radius:10px; overflow:hidden; cursor:pointer; background:#fff; transition:all 0.15s; }
-.cr-model-card:hover { border-color:#4F46E5; transform:translateY(-2px); box-shadow:0 4px 12px rgba(79,70,229,0.1); }
-.cr-model-card.selected { border-color:#111827; box-shadow:0 0 0 2px #111827; }
-.cr-model-thumb { height:100px; background:#F9FAFB; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; }
-.cr-model-tick { position:absolute; top:4px; right:4px; width:18px; height:18px; border-radius:50%; background:#111827; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-weight:700; }
-.cr-model-name { font-size:10px; font-weight:500; color:#6B7280; padding:5px 7px 6px; line-height:1.3; }
-
-/* ─── Settings grid ───────────────────────────────────────────────────────── */
-.cr-settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 16px; }
-@media(max-width:540px){ .cr-settings-grid{grid-template-columns:1fr;} }
-
-/* ─── Form inputs ─────────────────────────────────────────────────────────── */
-.cr-input { width:100%; padding:9px 12px; border:1.5px solid #E5E7EB; border-radius:9px; font-size:13px; font-family:inherit; color:#111827; background:#fff; outline:none; transition:border-color 0.15s; box-sizing:border-box; }
-.cr-input:focus { border-color:#4F46E5; box-shadow:0 0 0 3px rgba(79,70,229,0.08); }
-.cr-two-col { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
-@media(max-width:500px){ .cr-two-col{grid-template-columns:1fr;} }
-
-/* ─── Tags ────────────────────────────────────────────────────────────────── */
-.cr-tags { display:flex; flex-wrap:wrap; align-items:center; gap:5px; padding:6px 10px; border:1.5px solid #E5E7EB; border-radius:9px; background:#fff; min-height:42px; cursor:text; margin-bottom:14px; }
-.cr-tags:focus-within { border-color:#4F46E5; }
-.cr-tag { display:inline-flex; align-items:center; gap:3px; background:#EEF2FF; color:#4F46E5; font-size:12px; font-weight:600; padding:3px 9px; border-radius:20px; }
-.cr-tag-x { background:none; border:none; cursor:pointer; color:#4F46E5; font-size:15px; padding:0; line-height:1; }
-.cr-tag-input { border:none; outline:none; font-size:13px; font-family:inherit; flex:1; min-width:100px; color:#111827; background:transparent; }
-
-/* ─── Choice / category buttons ──────────────────────────────────────────── */
-.cr-choice-btn { padding:8px 16px; border:1.5px solid #E5E7EB; border-radius:8px; background:#fff; font-family:inherit; font-size:13px; font-weight:500; color:#6B7280; cursor:pointer; transition:all 0.15s; }
-.cr-choice-btn.active { border-color:#111827; background:#111827; color:#fff; }
-.cr-choice-btn:hover:not(.active) { border-color:#9CA3AF; color:#374151; }
-
-/* ─── Template list ───────────────────────────────────────────────────────── */
-.cr-template-list { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
-.cr-template-row { display:flex; align-items:center; gap:14px; padding:13px 16px; border:1.5px solid #E5E7EB; border-radius:10px; cursor:pointer; transition:all 0.15s; }
-.cr-template-row:hover { border-color:#4F46E5; background:#FAFBFF; }
-.cr-template-row.selected { border-color:#111827; background:#FAFAFA; }
-.cr-template-dot { width:18px; height:18px; border-radius:5px; flex-shrink:0; }
-.cr-template-check { width:20px; height:20px; border-radius:50%; background:#111827; display:flex; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:700; opacity:0; transition:opacity 0.15s; }
-.cr-template-check.visible { opacity:1; }
-
-/* ─── Front / back image pair ─────────────────────────────────────────────── */
-.cr-img-pair { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px; }
-@media(max-width:480px){ .cr-img-pair{grid-template-columns:1fr;} }
-
-/* ─── Multi-image grid ────────────────────────────────────────────────────── */
-.cr-img-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:8px; }
-@media(max-width:500px){ .cr-img-grid{grid-template-columns:repeat(3,1fr);} }
-.cr-img-thumb { height:90px; border-radius:9px; overflow:hidden; border:1px solid #E5E7EB; position:relative; }
-.cr-img-rm { position:absolute; top:4px; right:4px; width:20px; height:20px; border-radius:50%; background:rgba(0,0,0,0.5); border:none; color:#fff; cursor:pointer; font-size:13px; display:flex; align-items:center; justify-content:center; padding:0; line-height:1; }
-.cr-img-add { height:90px; border:2px dashed #D1D5DB; border-radius:9px; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; transition:all 0.15s; gap:4px; }
-.cr-img-add:hover { border-color:#4F46E5; background:#EEF2FF; }
-.cr-img-add.busy { opacity:0.6; cursor:wait; }
-
-/* ─── Generating screen ───────────────────────────────────────────────────── */
-.cr-generating { text-align:center; padding:48px 24px; }
-.cr-gen-orbit { width:72px; height:72px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 24px; position:relative; }
-.cr-gen-orbit-ring { position:absolute; inset:0; border-radius:50%; border:3px solid #E5E7EB; border-top-color:var(--accent,#4F46E5); animation:cr-spin 1s linear infinite; }
-.cr-gen-orbit-inner { position:absolute; inset:8px; border-radius:50%; border:2px solid #F3F4F6; border-bottom-color:var(--accent,#4F46E5); animation:cr-spin 1.6s linear infinite reverse; opacity:0.6; }
-.cr-gen-title { font-size:20px; font-weight:800; color:#111827; margin:0 0 6px; letter-spacing:-0.3px; }
-.cr-gen-sub { font-size:13px; color:#9CA3AF; margin:0 0 20px; }
-.cr-gen-bar-track { height:8px; background:#F3F4F6; border-radius:99px; overflow:hidden; max-width:360px; margin:0 auto 6px; }
-.cr-gen-bar-fill { height:100%; border-radius:99px; transition:width 2s linear; }
-.cr-gen-pct { font-size:13px; font-weight:700; margin-bottom:24px; }
-.cr-gen-stages { max-width:340px; margin:0 auto; text-align:left; display:flex; flex-direction:column; gap:10px; }
-.cr-gen-stage { display:flex; align-items:center; gap:10px; font-size:12px; color:#D1D5DB; transition:all 0.4s; }
-.cr-gen-stage.active { color:#111827; font-weight:600; }
-.cr-gen-stage.done   { color:#059669; }
-.cr-gen-stage-icon { width:18px; height:18px; border-radius:50%; background:#E5E7EB; display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all 0.3s; }
-.cr-gen-stage.done .cr-gen-stage-icon { background:#059669; }
-.cr-gen-pulse { width:6px; height:6px; border-radius:50%; background:#fff; display:block; animation:cr-spin 0.6s linear infinite; }
-.cr-gen-timer { font-size:11px; color:#9CA3AF; margin:20px 0 0; }
-
-/* ─── Output / completion ─────────────────────────────────────────────────── */
-.cr-complete-header { background:linear-gradient(135deg,#ECFDF5,#F0FDF4); border:1px solid #A7F3D0; border-radius:14px; padding:20px 20px 16px; margin-bottom:20px; display:flex; align-items:flex-start; gap:14px; position:relative; overflow:hidden; }
-.cr-complete-check { width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; box-shadow:0 4px 12px rgba(5,150,105,0.3); animation:cr-float 2s ease-in-out infinite; }
-.cr-complete-title { font-size:17px; font-weight:800; color:#065F46; margin:0 0 3px; }
-.cr-complete-sub   { font-size:13px; color:#059669; margin:0; }
-.cr-confetti { position:absolute; bottom:6px; right:12px; display:flex; gap:0; }
-.cr-confetti-dot { width:7px; height:7px; border-radius:50%; position:absolute; bottom:0; animation:cr-confetti 1.6s ease-out infinite; }
-.cr-result-img-wrap { background:#F1F5F9; border-radius:14px; display:flex; justify-content:center; align-items:center; padding:16px; margin-bottom:16px; border:1px solid #E2E8F0; min-height:200px; }
-.cr-result-img { max-width:100%; max-height:500px; object-fit:contain; border-radius:10px; box-shadow:0 8px 32px rgba(0,0,0,0.12); }
-.cr-result-actions { display:flex; gap:8px; flex-wrap:wrap; padding-top:16px; border-top:1px solid #F3F4F6; align-items:center; }
-.cr-btn-save { display:inline-flex; align-items:center; justify-content:center; font-family:inherit; font-size:13px; font-weight:700; color:#fff; padding:10px 20px; border-radius:9px; border:none; cursor:pointer; transition:all 0.15s; margin-left:auto; }
-.cr-btn-save:hover:not(:disabled) { filter:brightness(1.1); }
-.cr-btn-save:disabled { opacity:0.5; cursor:not-allowed; }
-
-/* ─── Banners ─────────────────────────────────────────────────────────────── */
-.cr-ok-banner { background:#ECFDF5; border:1px solid #A7F3D0; border-radius:8px; padding:10px 12px; font-size:12px; color:#065F46; font-weight:500; margin-top:10px; }
-.cr-err-banner { display:flex; align-items:center; gap:8px; background:#FEF2F2; border:1px solid #FECACA; border-radius:10px; padding:12px 14px; margin-bottom:16px; font-size:13px; color:#B91C1C; }
-
-/* ─── Buttons ─────────────────────────────────────────────────────────────── */
-.cr-btn { display:inline-flex; align-items:center; justify-content:center; font-family:inherit; font-weight:600; border-radius:9px; border:none; cursor:pointer; transition:all 0.15s; white-space:nowrap; font-size:13px; padding:9px 18px; }
-.cr-btn:disabled { opacity:0.45; cursor:not-allowed; }
-.cr-btn-primary { background:#111827; color:#fff; }
-.cr-btn-primary:hover:not(:disabled) { background:#1F2937; }
-.cr-btn-ghost { background:#F3F4F6; color:#374151; }
-.cr-btn-ghost:hover { background:#E5E7EB; }
-.cr-btn-outline { background:#fff; color:#374151; border:1px solid #D1D5DB; text-decoration:none; }
-.cr-btn-outline:hover { background:#F9FAFB; }
-
-@media(max-width:640px){
-  .cr-body { padding:0 12px; }
-  .cr-card { padding:18px 14px; }
-  .cr-sel-title { font-size:20px; }
-}
-
-/* ─── Product type selector ───────────────────────────────────────────────── */
-.cr-pt-group { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:#9CA3AF; margin:0 0 8px; }
-.cr-pt-grid { display:flex; flex-wrap:wrap; gap:6px; }
-.cr-pt-btn { padding:7px 14px; border:1.5px solid #E5E7EB; border-radius:20px; background:#fff; font-family:inherit; font-size:12px; font-weight:500; color:#374151; cursor:pointer; transition:all 0.15s; white-space:nowrap; }
-.cr-pt-btn:hover:not(.active) { border-color:#9CA3AF; background:#F9FAFB; color:#111827; }
-.cr-pt-btn.active { border-color:#4F46E5; background:#4F46E5; color:#fff; font-weight:600; }
-
-/* ─── Wear type selector (shows below when clothing is selected) ───────────── */
-.cr-weartype-box { background:#EEF2FF; border:1.5px solid #C7D2FE; border-radius:12px; padding:16px; margin-top:20px; }
-.cr-weartype-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
-@media(max-width:500px){ .cr-weartype-grid{ grid-template-columns:1fr; } }
-.cr-weartype-btn { padding:12px 10px; border:1.5px solid #C7D2FE; border-radius:10px; background:#fff; font-family:inherit; cursor:pointer; transition:all 0.15s; text-align:left; }
-.cr-weartype-btn:hover:not(.active) { border-color:#6366F1; background:#F5F3FF; }
-.cr-weartype-btn.active { border-color:#4F46E5; background:#4F46E5; color:#fff; }
-.cr-weartype-label { display:block; font-size:12px; font-weight:700; margin-bottom:3px; }
-.cr-weartype-desc { display:block; font-size:11px; opacity:0.65; }
-
-/* ─── Infographic addon toggle ────────────────────────────────────────────── */
-.cr-addon-row { background:#F0FDF4; border:1.5px solid #A7F3D0; border-radius:10px; padding:12px 14px; margin:14px 0 0; cursor:pointer; transition:border-color 0.15s; }
-.cr-addon-row:hover { border-color:#6EE7B7; }
-.cr-addon-inner { display:flex; align-items:center; gap:10px; }
-.cr-addon-icon-box { width:32px; height:32px; border-radius:8px; background:#D1FAE5; display:flex; align-items:center; justify-content:center; color:#059669; flex-shrink:0; }
-.cr-addon-text { flex:1; }
-.cr-addon-title { font-size:12px; font-weight:600; color:#065F46; margin:0 0 2px; }
-.cr-addon-sub { font-size:11px; color:#6B7280; margin:0; }
-.cr-addon-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
-.cr-addon-credit { font-size:10px; font-weight:700; color:#059669; background:#D1FAE5; padding:2px 7px; border-radius:20px; }
-.cr-toggle { width:38px; height:22px; border-radius:11px; background:#D1D5DB; position:relative; cursor:pointer; transition:background 0.2s; flex-shrink:0; }
-.cr-toggle.on { background:#059669; }
-.cr-toggle-thumb { position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform 0.2s; box-shadow:0 1px 4px rgba(0,0,0,0.2); }
-.cr-toggle.on .cr-toggle-thumb { transform:translateX(16px); }
-
-/* ─── Infographic result section ──────────────────────────────────────────── */
-.cr-info-result { margin-top:20px; border-top:1px solid #D1FAE5; padding-top:16px; }
-.cr-info-result-hdr { display:flex; align-items:center; gap:6px; margin-bottom:10px; }
-.cr-info-result-title { font-size:13px; font-weight:600; color:#059669; margin:0; }
-.cr-info-loading { display:flex; align-items:center; gap:10px; padding:12px 14px; background:#F0FDF4; border-radius:8px; border:1px solid #A7F3D0; }
-.cr-info-loading-text { font-size:12px; color:#059669; font-weight:500; }
-`;

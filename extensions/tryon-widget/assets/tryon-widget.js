@@ -39,6 +39,9 @@
   var MAX_FREE_TRYONS = 3;
   var USAGE_KEY       = "tryfit_usage";
 
+  // ── Lead capture — once per browser, gated behind the blurred result ───────
+  var LEAD_CAPTURED_KEY = "tryfit_lead_captured";
+
   // ── Polyfill: Element.closest for IE / old Android ──────────────────────────
   if (typeof Element !== "undefined" && !Element.prototype.closest) {
     Element.prototype.closest = function (sel) {
@@ -123,6 +126,7 @@
             }
             _self._applySettings(_self._settingsCache);
           }
+          _self._syncFlipCardHeight();
         }, 150);
       }
       window.addEventListener("resize", _onViewportChange);
@@ -321,6 +325,7 @@
         "tryfit-share-wa": "share-wa",
         "tryfit-retry": "retry",
         "tryfit-retry-error": "retry",
+        "tryfit-lead-submit": "lead-submit",
       };
       return map[el.id] || null;
     },
@@ -361,6 +366,10 @@
           if (img && img.src) self.saveImage(img.src);
           break;
         }
+
+        case "lead-submit":
+          this._submitLead();
+          break;
 
         case "share-wa": {
           var ri = document.getElementById("tryfit-result-img");
@@ -728,9 +737,9 @@
         button_border_radius: 8,
         button_width: 0,
         button_height: 0,
-        button_padding_top: 10,
+        button_padding_top: 14,
         button_padding_right: 24,
-        button_padding_bottom: 10,
+        button_padding_bottom: 14,
         button_padding_left: 24,
         button_margin_top: 0,
         button_margin_right: 0,
@@ -738,12 +747,12 @@
         button_margin_left: 0,
         widget_title: "Try On This Look",
         widget_subtitle: "See how it fits before you buy",
-        title_font_size: 20,
-        subtitle_font_size: 14,
+        title_font_size: 16,
+        subtitle_font_size: 12,
         title_font_weight: "600",
         title_font_family: "Inter, sans-serif",
         subtitle_font_family: "Inter, sans-serif",
-        desktop_title_font_size: 20,
+        desktop_title_font_size: 16,
         mobile_title_font_size: 14,
         desktop_widget_width: 0,
         desktop_widget_width_unit: "px",
@@ -753,9 +762,9 @@
         mobile_widget_width_unit: "%",
         mobile_widget_height: 0,
         mobile_widget_height_unit: "auto",
-        desktop_padding_top: 10,
+        desktop_padding_top: 14,
         desktop_padding_right: 24,
-        desktop_padding_bottom: 10,
+        desktop_padding_bottom: 14,
         desktop_padding_left: 24,
         mobile_padding_top: 8,
         mobile_padding_right: 16,
@@ -1088,7 +1097,7 @@
             ? s.desktop_title_font_size
             : s.title_font_size != null
               ? s.title_font_size
-              : 18;
+              : 16;
         titleEl.style.setProperty("font-size", titleFs + "px", "important");
         titleEl.style.setProperty(
           "font-weight",
@@ -1112,7 +1121,7 @@
           subtitleEl.style.setProperty("display", "block", "important");
           subtitleEl.style.setProperty(
             "font-size",
-            (s.subtitle_font_size || 14) + "px",
+            (s.subtitle_font_size || 12) + "px",
             "important",
           );
           if (s.subtitle_font_family) {
@@ -1325,10 +1334,10 @@
       var s = settings || this._settingsCache || {};
       var bg = s.button_color || "#111827";
       var fg = s.button_text_color || "#ffffff";
-      var radius = s.button_border_radius != null ? s.button_border_radius : 4;
-      var pt = s.button_padding_top != null ? s.button_padding_top : 12;
+      var radius = s.button_border_radius != null ? s.button_border_radius : 8;
+      var pt = s.button_padding_top != null ? s.button_padding_top : 14;
       var pr = s.button_padding_right != null ? s.button_padding_right : 24;
-      var pb = s.button_padding_bottom != null ? s.button_padding_bottom : 12;
+      var pb = s.button_padding_bottom != null ? s.button_padding_bottom : 14;
       var pl = s.button_padding_left != null ? s.button_padding_left : 24;
       var isMobileInit = window.innerWidth <= 768;
       var initW = isMobileInit
@@ -2420,6 +2429,7 @@
             avatar_image: avatarBase64, // User photo must be base64
             shopify_variant_id: variant.id,
             shopify_product_id: self.config.productId,
+            product_title: self.config.productTitle || "", // free zero-config signal for garment-category inference
             session_id: self.sessionId,
           }),
         };
@@ -2549,6 +2559,10 @@
       this._startCountdown(600);
       this._applyResultCoupon();
       this._showStep("result");
+      // Front face (form) for a fresh browser; back face (purchase controls)
+      // for one that already submitted — instant=true so a returning shopper
+      // doesn't see an unprompted flip animation play on load.
+      this._applyLeadGate(true);
     },
 
     showProgress: function (msg) {
@@ -2587,6 +2601,183 @@
       } catch (e) {
         // localStorage unavailable (incognito quota, etc.) — silently skip
       }
+    },
+
+    // ── Lead capture helpers ─────────────────────────────────────────────────
+
+    _hasCapturedLead: function () {
+      try {
+        return localStorage.getItem(LEAD_CAPTURED_KEY) === "1";
+      } catch (e) {
+        // localStorage unavailable — treat as not-yet-captured (fresher gate
+        // shows every time, which is the safe default) rather than crash.
+        return false;
+      }
+    },
+
+    _markLeadCaptured: function () {
+      try {
+        localStorage.setItem(LEAD_CAPTURED_KEY, "1");
+      } catch (e) {
+        // localStorage unavailable (incognito quota, etc.) — silently skip
+      }
+    },
+
+    // The purchase panel flips between the lead form (front) and the actual
+    // purchase controls (back); the result image + product title blur/hide
+    // alongside it via _setResultGate.
+    //
+    // instant=true skips the CSS transition (used when the result step first
+    // renders, so a returning shopper who already submitted doesn't see an
+    // unprompted flip animation play on load — the flip should only animate
+    // in response to an actual submit).
+    _applyLeadGate: function (instant) {
+      var gated = this._hasCapturedLead() === false;
+      if (gated) {
+        this._showLeadGate(instant);
+      } else {
+        this._hideLeadGate(instant);
+      }
+      this._syncFlipCardHeight();
+    },
+
+    // Both faces of the flip card are absolutely positioned on top of each
+    // other (standard flip-card technique), so neither contributes to
+    // normal document flow — the card's own height has to be set explicitly,
+    // sized to whichever face is taller. Re-run whenever content that could
+    // change either face's height loads (variants/prices) or the viewport
+    // resizes.
+    _syncFlipCardHeight: function () {
+      var card = document.getElementById("tryfit-flip-card");
+      if (!card) return;
+      var front = card.querySelector(".tryfit-flip-front");
+      var back = card.querySelector(".tryfit-flip-back");
+      var frontH = front ? front.scrollHeight : 0;
+      var backH = back ? back.scrollHeight : 0;
+      var h = Math.max(frontH, backH);
+      if (h > 0) card.style.height = h + "px";
+    },
+
+    _setFlipped: function (flipped, instant) {
+      var card = document.getElementById("tryfit-flip-card");
+      if (!card) return;
+      var inner = card.querySelector(".tryfit-flip-card-inner");
+      if (instant && inner) {
+        inner.style.transition = "none";
+        void inner.offsetHeight; // force reflow before the class change below
+      }
+      card.classList[flipped ? "add" : "remove"]("tryfit-flipped");
+      if (instant && inner) {
+        requestAnimationFrame(function () {
+          inner.style.transition = "";
+        });
+      }
+    },
+
+    // Blurs the result image and hides the product title until the lead is
+    // submitted — separate from the flip card, which only covers the
+    // purchase panel.
+    _setResultGate: function (gated) {
+      var frame = document.querySelector("#tryfit-step-result .tryfit-result-frame");
+      var titleHeader = document.querySelector("#tryfit-step-result .tryfit-result-product-header");
+      if (frame) frame.classList[gated ? "add" : "remove"]("tryfit-blurred");
+      if (titleHeader) titleHeader.classList[gated ? "add" : "remove"]("tryfit-hidden");
+    },
+
+    // Front face (lead form) showing.
+    _showLeadGate: function (instant) {
+      this._setFlipped(false, instant);
+      this._setResultGate(true);
+
+      // Reset the form each time it's shown (e.g. re-upload → new result).
+      var emailEl = document.getElementById("tryfit-lead-email");
+      var phoneEl = document.getElementById("tryfit-lead-phone");
+      var consentEl = document.getElementById("tryfit-lead-consent");
+      var errEl = document.getElementById("tryfit-lead-error");
+      if (emailEl) emailEl.value = "";
+      if (phoneEl) phoneEl.value = "";
+      if (consentEl) consentEl.checked = false;
+      if (errEl) {
+        errEl.style.display = "none";
+        errEl.textContent = "";
+      }
+    },
+
+    // Back face (purchase controls) showing.
+    _hideLeadGate: function (instant) {
+      this._setFlipped(true, instant);
+      this._setResultGate(false);
+    },
+
+    _showLeadError: function (msg) {
+      var errEl = document.getElementById("tryfit-lead-error");
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.style.display = "block";
+      }
+    },
+
+    _submitLead: function () {
+      var self = this;
+      var email = (document.getElementById("tryfit-lead-email") || {}).value || "";
+      var phone = (document.getElementById("tryfit-lead-phone") || {}).value || "";
+      var consent = !!(document.getElementById("tryfit-lead-consent") || {}).checked;
+      email = email.trim();
+      phone = phone.trim();
+
+      var emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+      if (!emailOk) {
+        this._showLeadError("Please enter a valid email address.");
+        return;
+      }
+      if (phone.length < 6) {
+        this._showLeadError("Please enter a valid phone number.");
+        return;
+      }
+      if (!consent) {
+        this._showLeadError("Please agree to the Privacy Policy and Terms of Service to continue.");
+        return;
+      }
+
+      var shop = this.config.shop || window.location.hostname;
+
+      // Unlock immediately — the result is already generated and paid for by
+      // the time this form shows, so don't make the shopper sit through a
+      // network round-trip to see it. The save to the backend happens in the
+      // background; if it fails we log it but the shopper still gets their
+      // result (matches the "don't block the frontend on the backend" call).
+      self._markLeadCaptured();
+      self._hideLeadGate();
+      self.showToast("Saving your details…", 4000);
+
+      fetch(
+        this.config.proxyUrl + "/api/lead/capture?shop=" + encodeURIComponent(shop),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: email,
+            phone: phone,
+            consent: true,
+            session_id: self.sessionId || null,
+          }),
+        },
+      )
+        .then(function (r) {
+          return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+        })
+        .then(function (res) {
+          if (!res.ok) {
+            log("lead capture rejected:", res.data && res.data.error);
+            self.showToast("Could not save your details — you can still use your result.", 4000);
+            return;
+          }
+          self.showToast("Details saved ✓", 2500);
+        })
+        .catch(function (err) {
+          log("lead capture error:", err.message);
+          self.showToast("Could not save your details — you can still use your result.", 4000);
+        });
     },
 
     _showLimitReached: function () {
@@ -3127,6 +3318,7 @@
           avatar_image: avatarBase64,
           shopify_variant_id: variant.id,
           shopify_product_id: self.config.productId,
+          product_title: self.config.productTitle || "",
           session_id: self.sessionId,
         }),
       };

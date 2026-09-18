@@ -94,16 +94,12 @@ async function handleTryOn(request) {
   //   );
   // }
 
-  // ── Create session ────────────────────────────────────────────
-  console.log("[api.tryon] calling PHP /session/create", { shop: shopDomain, product_id, variant_id });
-  const sessRes = await fetchPhp(phpBase, phpSecret, "POST", "/session/create", {
-    product_id:  product_id  ?? null,
-    variant_id:  variant_id  ?? null,
-    device_type: device_type ?? null,
-  }, shopDomain, 10_000);
-  console.log("[api.tryon] session/create response", { ok: sessRes.ok, data: sessRes.data, error: sessRes.error });
-
-  const sessionId = sessRes.ok ? sessRes.data?.session_id : (client_session ?? null);
+  // ── Session ──────────────────────────────────────────────────────
+  // The widget already creates a session via /api/session/create before
+  // calling here and sends its session_id in the body — reuse it instead of
+  // making PHP create a second one. Saves a full round-trip off the critical
+  // path before the (slow) try-on call even starts.
+  const sessionId = client_session ?? null;
 
   // ── Call PHP try-on endpoint ──────────────────────────────────
   // Path must be /tryon — sending "" (root) returns 404 from the PHP router.
