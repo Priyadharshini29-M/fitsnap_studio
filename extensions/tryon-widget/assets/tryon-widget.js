@@ -2146,6 +2146,7 @@
           el.style.display = steps[i] === step ? "block" : "none";
         }
       }
+      if (step === "upload") this._applyUploadGuidance();
       log("step:", step);
     },
 
@@ -2227,6 +2228,24 @@
         return;
       }
 
+      // Sarees need the whole body in frame to drape correctly. Catch clearly
+      // unsuitable photos (cropped, square, tiny) here, before a generation
+      // is spent on them. Other products skip straight to processing.
+      if (this._isSareeProduct()) {
+        var checkSelf = this;
+        this._checkSareePhoto(file).then(function (problem) {
+          if (problem) {
+            checkSelf.showError(problem);
+            return;
+          }
+          checkSelf._processPhoto(file);
+        });
+        return;
+      }
+      this._processPhoto(file);
+    },
+
+    _processPhoto: function (file) {
       var self = this;
       this._showStep("processing");
       this.showProgress("Resizing your photo…");
@@ -2263,6 +2282,77 @@
           );
           log("photo error:", err);
         });
+    },
+
+    // ── Saree photo guidance ────────────────────────────────────────────────
+
+    _isSareeProduct: function () {
+      var title = (this.config && this.config.productTitle) || "";
+      return /\b(sarees?|saris?)\b/i.test(title);
+    },
+
+    // Shows the "full-length photo" tips on the upload step for saree products.
+    _applyUploadGuidance: function () {
+      var tips = document.getElementById("tryfit-saree-tips");
+      if (tips) tips.style.display = this._isSareeProduct() ? "block" : "none";
+    },
+
+    // Resolves with a shopper-facing message when the photo is clearly not
+    // suitable for a saree, or null when it looks fine. Never rejects — if
+    // the photo can't be inspected, the normal pipeline handles it.
+    _checkSareePhoto: function (file) {
+      var MIN_SIDE = 300;      // px — smaller photos lose the drape detail
+      var MIN_RATIO = 1.15;    // height / width — full-length photos are portrait
+      var MAX_FACE = 0.22;     // face height / image height — bigger means cropped
+      var NOT_FULL =
+        "For a saree we need your full length. Please upload a photo of you " +
+        "standing, front-facing, showing head to toe.";
+
+      return new Promise(function (resolve) {
+        var url;
+        try {
+          url = URL.createObjectURL(file);
+        } catch (e) {
+          resolve(null);
+          return;
+        }
+        var img = new Image();
+        function done(result) {
+          try { URL.revokeObjectURL(url); } catch (ignore) {}
+          resolve(result);
+        }
+        img.onerror = function () { done(null); };
+        img.onload = function () {
+          var w = img.naturalWidth;
+          var h = img.naturalHeight;
+          if (!w || !h) { done(null); return; }
+          if (Math.min(w, h) < MIN_SIDE) {
+            done("This photo is too small. Please choose a larger photo, at least " + MIN_SIDE + " pixels wide.");
+            return;
+          }
+          if (h / w < MIN_RATIO) { done(NOT_FULL); return; }
+
+          // Where the browser supports it (Chrome), a large face relative to
+          // the frame means a waist-up or close-up shot.
+          if (typeof window.FaceDetector === "function") {
+            try {
+              new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 })
+                .detect(img)
+                .then(function (faces) {
+                  if (faces && faces.length && faces[0].boundingBox.height / h > MAX_FACE) {
+                    done(NOT_FULL);
+                  } else {
+                    done(null);
+                  }
+                })
+                .catch(function () { done(null); });
+              return;
+            } catch (e) { /* fall through */ }
+          }
+          done(null);
+        };
+        img.src = url;
+      });
     },
 
     _createSession: function () {
@@ -2413,81 +2503,97 @@
         self._lastAvatarBase64 = avatarBase64;
         self._lastClothingImageUrl = clothingImage;
 
-        var controller = window.AbortController ? new AbortController() : null;
-        var timeoutId = controller
-          ? setTimeout(function () {
-              controller.abort();
-            }, 95000)
-          : null;
-        var shop = self.config.shop || window.location.hostname;
-
-        var opts = {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        return self
+          ._submitAndPollTryOn({
             clothing_image: clothingImage, // URL — PHP downloads it server-side
             avatar_image: avatarBase64, // User photo must be base64
             shopify_variant_id: variant.id,
             shopify_product_id: self.config.productId,
             product_title: self.config.productTitle || "", // free zero-config signal for garment-category inference
             session_id: self.sessionId,
-          }),
-        };
-        if (controller) opts.signal = controller.signal;
-
-        return fetch(
-          self.config.proxyUrl + "/api/tryon?shop=" + encodeURIComponent(shop),
-          opts,
-        )
-          .then(function (r) {
-            if (timeoutId) clearTimeout(timeoutId);
-            if (!r.ok) {
-              // Read the actual error body so the user sees a helpful message
-              return r
-                .json()
-                .catch(function () {
-                  return {};
-                })
-                .then(function (errBody) {
-                  if (errBody.raw_error || errBody.status_code !== undefined) {
-                    log(
-                      "try-on API error — status:",
-                      errBody.status_code,
-                      "detail:",
-                      errBody.raw_error,
-                    );
-                  }
-                  return Promise.reject(
-                    new Error(
-                      errBody.error || "Something went wrong. Please try again.",
-                    ),
-                  );
-                });
-            }
-            return r.json();
           })
           .then(function (data) {
             self._stopProgress();
-            if (data.result_image) {
-              self.showResult(data.result_image);
-            } else {
-              self.showError(data.error || "Try-on failed. Please try again.");
-            }
+            self.showResult(data.result_image);
           })
           .catch(function (err) {
-            if (timeoutId) clearTimeout(timeoutId);
             self._stopProgress();
-            var msg;
-            if (err && err.name === "AbortError") {
-              msg = "This is taking longer than expected. Please try again.";
-            } else if (err && err.message && err.message.length < 200) {
-              msg = err.message;
-            } else {
-              msg = "Something went wrong. Please try again.";
-            }
+            var msg = err && err.message && err.message.length < 200
+              ? err.message
+              : "Something went wrong. Please try again.";
             self.showError(msg);
             log("runTryOn error:", err);
           });
+      });
+    },
+
+    // Submits a try-on job then polls for its result, instead of one long
+    // blocking request. Each individual network call (submit, each status
+    // check) stays fast — the polling loop, not any single request, is what
+    // waits out the actual generation time. This is what keeps every request
+    // safely under Shopify App Proxy's own ~60s timeout regardless of how
+    // long RunPod actually takes, which a single long-lived request cannot
+    // do no matter how high its own client/server timeouts are raised.
+    // Resolves with {result_image, seed} or rejects with an Error.
+    _submitAndPollTryOn: function (body) {
+      var self = this;
+      var shop = self.config.shop || window.location.hostname;
+      var deadline = Date.now() + 190000; // overall safety net, same ceiling as before
+      var pollIntervalMs = 2500;
+
+      function submit() {
+        return fetch(
+          self.config.proxyUrl + "/api/tryon?shop=" + encodeURIComponent(shop),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        ).then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (data) {
+            if (!r.ok || !data.job_id) {
+              return Promise.reject(new Error(data.error || "Something went wrong. Please try again."));
+            }
+            return data;
+          });
+        });
+      }
+
+      function poll(jobId, seed) {
+        if (Date.now() > deadline) {
+          return Promise.reject(new Error("This is taking longer than expected. Please try again."));
+        }
+        var qs =
+          "job_id=" + encodeURIComponent(jobId) +
+          "&shop=" + encodeURIComponent(shop) +
+          "&seed=" + encodeURIComponent(seed == null ? -1 : seed) +
+          (self.sessionId ? "&session_id=" + encodeURIComponent(self.sessionId) : "");
+
+        return fetch(self.config.proxyUrl + "/api/tryon-status?" + qs)
+          .then(function (r) {
+            return r.json().catch(function () { return {}; }).then(function (data) {
+              if (!r.ok && data.status !== "failed") {
+                return Promise.reject(new Error(data.error || "Something went wrong. Please try again."));
+              }
+              return data;
+            });
+          })
+          .then(function (data) {
+            if (data.status === "completed") return data;
+            if (data.status === "failed") {
+              return Promise.reject(new Error(data.error || "Try-on failed. Please try again."));
+            }
+            // still processing — wait, then check again
+            return new Promise(function (resolve) {
+              setTimeout(resolve, pollIntervalMs);
+            }).then(function () {
+              return poll(jobId, seed);
+            });
+          });
+      }
+
+      return submit().then(function (submitData) {
+        return poll(submitData.job_id, submitData.seed);
       });
     },
 
@@ -3306,53 +3412,24 @@
 
       this.startProgressAnimation(28);
 
-      var controller = window.AbortController ? new AbortController() : null;
-      var timeoutId = controller ? setTimeout(function () { controller.abort(); }, 95000) : null;
-      var shop = self.config.shop || window.location.hostname;
-
-      var opts = {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      self
+        ._submitAndPollTryOn({
           clothing_image: clothingImage,
           avatar_image: avatarBase64,
           shopify_variant_id: variant.id,
           shopify_product_id: self.config.productId,
           product_title: self.config.productTitle || "",
           session_id: self.sessionId,
-        }),
-      };
-      if (controller) opts.signal = controller.signal;
-
-      fetch(self.config.proxyUrl + "/api/tryon?shop=" + encodeURIComponent(shop), opts)
-        .then(function (r) {
-          if (timeoutId) clearTimeout(timeoutId);
-          if (!r.ok) {
-            return r.json().catch(function () { return {}; }).then(function (errBody) {
-              return Promise.reject(new Error(errBody.error || "Something went wrong. Please try again."));
-            });
-          }
-          return r.json();
         })
         .then(function (data) {
           self._stopProgress();
-          if (data.result_image) {
-            self.showResult(data.result_image);
-          } else {
-            self.showError(data.error || "Try-on failed. Please try again.");
-          }
+          self.showResult(data.result_image);
         })
         .catch(function (err) {
-          if (timeoutId) clearTimeout(timeoutId);
           self._stopProgress();
-          var msg;
-          if (err && err.name === "AbortError") {
-            msg = "This is taking longer than expected. Please try again.";
-          } else if (err && err.message && err.message.length < 200) {
-            msg = err.message;
-          } else {
-            msg = "Something went wrong. Please try again.";
-          }
+          var msg = err && err.message && err.message.length < 200
+            ? err.message
+            : "Something went wrong. Please try again.";
           self.showError(msg);
           log("_rerunTryOnForVariant error:", err);
         });

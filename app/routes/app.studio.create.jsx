@@ -99,6 +99,13 @@ export const action = async ({ request }) => {
         "full",
       clothing_prompt: body.clothing_prompt || null,
       workflow_type: body.workflow_type || null,
+      // Wizard's explicit product type (e.g. "saree") — PHP uses it to pick
+      // the try-on engine instead of guessing from the free-text prompt.
+      product_type: body.product_type || null,
+      // Accessories Try-On: which accessory and where it goes on the model,
+      // so PHP can tell the try-on engine exactly where to place it.
+      accessory_category: body.accessory_category || null,
+      accessory_placement: body.accessory_placement || null,
     };
     if (!phpBody.front_image_url) {
       return Response.json(
@@ -311,7 +318,7 @@ const ACCESSORY_PLACEMENTS = {
   watch: ["Wrist (Left)", "Wrist (Right)"],
   necklace: ["Center Neck", "Layered", "Collarbone"],
   earring: ["Both Ears", "Left Ear", "Right Ear"],
-  handbag: ["Shoulder (Left)", "Shoulder (Right)", "Held in Hand", "Crossbody"],
+  handbag: ["Held in Hand", "Shoulder (Left)", "Shoulder (Right)", "Crossbody"],
   sunglasses: ["On Face", "Held in Hand"],
   bracelet: ["Wrist (Left)", "Wrist (Right)", "Stacked"],
   ring: ["Ring Finger (Left)", "Ring Finger (Right)", "Index Finger"],
@@ -2719,6 +2726,7 @@ function WorkflowModelGeneration({ models }) {
         model_image_url: selectedModel === "__custom__" ? modelUrl : null,
         model_gender: selectedModel === "__custom__" ? modelGender : null,
         garment_type: productCat?.garmentType ?? wearType ?? "full",
+        product_type: productType,
         clothing_prompt: productPrompt || null,
         ...settings,
       },
@@ -3279,6 +3287,7 @@ function WorkflowFlatLay({ models }) {
         model_image_url: selectedModel === "__custom__" ? modelUrl : null,
         model_gender: selectedModel === "__custom__" ? modelGender : null,
         garment_type: productCat?.garmentType ?? wearType ?? "full",
+        product_type: productType,
         clothing_prompt: fullPrompt || null,
         ...settings,
       },
@@ -3680,6 +3689,7 @@ function WorkflowMannequin({ models }) {
         model_image_url: selectedModel === "__custom__" ? modelUrl : null,
         model_gender: selectedModel === "__custom__" ? modelGender : null,
         garment_type: productCat?.garmentType ?? wearType ?? "full",
+        product_type: productType,
         clothing_prompt: productPrompt || null,
         ...settings,
       },
@@ -4050,6 +4060,8 @@ function WorkflowAccessories({ models }) {
         model_image_url: selectedModel === "__custom__" ? modelUrl : null,
         model_gender: selectedModel === "__custom__" ? modelGender : null,
         clothing_prompt: fullPrompt,
+        accessory_category: category,
+        accessory_placement: placement,
         ...settings,
       },
       {
@@ -4183,7 +4195,7 @@ function WorkflowAccessories({ models }) {
             required
             value={accUrl}
             onChange={setAccUrl}
-            note="Clean product-only shot on white or transparent background. No model, no extra props."
+            note="Clean product-only shot on a plain white or transparent background, with the whole item in frame (handle, clasp, strap, chain, pendant). No model, no props, nothing covering it — the result can only be as accurate as this photo."
           />
           <StepNav
             onBack={() => setStep(0)}

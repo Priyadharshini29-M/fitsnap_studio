@@ -206,6 +206,29 @@
 
 .tryfit-subheading em { font-style: normal; font-weight: 600; color: var(--tryfit-text-1); }
 
+/* Saree-only photo tips on the upload step */
+.tryfit-saree-tips {
+  margin:        0 0 14px;
+  padding:       12px 14px;
+  background:    var(--tryfit-primary-tint);
+  border:        1px solid var(--tryfit-primary-border);
+  border-radius: var(--tryfit-radius-sm);
+  text-align:    left;
+}
+.tryfit-saree-tips-title {
+  margin:      0 0 6px;
+  font-size:   13px;
+  font-weight: 600;
+  color:       var(--tryfit-text-1);
+}
+.tryfit-saree-tips-list {
+  margin:      0;
+  padding-left: 18px;
+  font-size:   13px;
+  line-height: 1.55;
+  color:       var(--tryfit-text-2);
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    STEP 1 · PRIVACY
    ════════════════════════════════════════════════════════════════════════════ */
