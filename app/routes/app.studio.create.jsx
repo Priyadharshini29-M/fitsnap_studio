@@ -4,7 +4,10 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useFetcher, useLoaderData, useNavigate } from "react-router";
+import { useFetcher, useLoaderData, useNavigate, useRouteLoaderData, useSearchParams } from "react-router";
+import { useCelebrate } from "../components/AppShell";
+import WorkflowCards from "../components/WorkflowCards";
+import { FsIcon } from "../components/fs-ui";
 import { authenticate } from "../shopify.server";
 import { ensureMerchant } from "../lib/merchant.server";
 import phpApiClient from "../lib/php-api.server";
@@ -16,11 +19,12 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const apiKey = await ensureMerchant(session);
   const api = phpApiClient(apiKey, PHP_API_URL, session.shop);
-  const [modelsRes, sessionsRes, productsRes, ragStatusRes] = await Promise.all([
+  const [modelsRes, sessionsRes, productsRes, ragStatusRes, defaultsRes] = await Promise.all([
     api.studioGetModels(),
     api.studioListSessions({ limit: 50 }),
     api.getProducts(),
     api.ragStatus(),
+    api.getDefaultModels(),
   ]);
   const sessions = sessionsRes.ok ? (sessionsRes.data?.sessions ?? []) : [];
   // Only offer results the merchant explicitly saved to the gallery — a fresh
@@ -42,6 +46,10 @@ export const loader = async ({ request }) => {
   });
   return {
     models: modelsRes.ok ? (modelsRes.data?.models ?? {}) : {},
+    // Built-in library (ready photos only), activated ones first — read by ModelSelector.
+    defaultModels: (defaultsRes.ok ? (defaultsRes.data?.models ?? []) : [])
+      .filter((m) => m.status === "ready" && m.image_url)
+      .sort((a, b) => Number(b.activated) - Number(a.activated)),
     savedGenerations,
     // For the Marketing Infographic wizard's product picker — grounds
     // generation in real product facts instead of only free-text description
@@ -256,61 +264,31 @@ const WORKFLOWS = [
     id: "model-generation",
     title: "AI Model Generation",
     desc: "Generate realistic product-on-model images from your product photo.",
-    steps: [
-      "Product Type",
-      "Product Image",
-      "Model",
-      "Settings",
-      "Review",
-      "Output",
-    ],
+    steps: ["Product Image", "Model", "Garment & Shot Type", "Details & Settings", "Output"],
   },
   {
     id: "flat-lay",
     title: "Flat Lay to Model",
     desc: "Convert flat lay garment photos into realistic worn-on-model photography.",
-    steps: [
-      "Product Type",
-      "Flat Lay Image",
-      "Model",
-      "Product Details",
-      "Settings",
-      "Review",
-      "Output",
-    ],
+    steps: ["Flat Lay Image", "Model", "Garment & Shot Type", "Details & Settings", "Output"],
   },
   {
     id: "mannequin",
     title: "Ghost Mannequin to Model",
     desc: "Transform invisible mannequin photography into realistic model photography.",
-    steps: [
-      "Product Type",
-      "Mannequin Image",
-      "Model",
-      "Settings",
-      "Review",
-      "Output",
-    ],
+    steps: ["Mannequin Image", "Model", "Garment & Shot Type", "Details & Settings", "Output"],
   },
   {
     id: "accessories",
     title: "Accessories Try-On",
     desc: "Place watches, jewellery, and bags on realistic model visuals.",
-    steps: [
-      "Choose Type",
-      "Accessory Image",
-      "Model",
-      "Placement",
-      "Settings",
-      "Review",
-      "Output",
-    ],
+    steps: ["Accessory Image", "Model", "Type & Placement", "Details & Settings", "Output"],
   },
   {
     id: "infographic",
     title: "Marketing Infographic",
     desc: "Turn a saved Fashn AI model photo — or a fresh upload — into a promotional infographic with OpenAI-extracted highlights.",
-    steps: ["Source Image", "Description", "Options", "Review", "Output"],
+    steps: ["Source Image", "Description", "Options", "Output"],
   },
 ];
 
@@ -961,90 +939,6 @@ const WF_COLORS = {
   infographic: { ...BRAND, time: "~90 sec" },
 };
 
-// ── Progress Stepper ──────────────────────────────────────────────────────────
-
-function Stepper({ steps, current, wfId }) {
-  const col = WF_COLORS[wfId] ?? BRAND;
-  // pct = how far along the rail (0 at first dot, 100 at last dot)
-  const pct = steps.length > 1 ? (current / (steps.length - 1)) * 100 : 0;
-
-  return (
-    <div className="cr-stepper">
-      {/* Context row */}
-      <div className="cr-step-ctx">
-        <span
-          className="cr-step-pill"
-          style={{ background: col.light, color: col.accent }}
-        >
-          Step {current + 1} / {steps.length}
-        </span>
-        <span className="cr-step-curname">{steps[current]}</span>
-      </div>
-
-      {/* Connected track */}
-      <div className="cr-track">
-        {/* Gray rail that spans dot-center to dot-center */}
-        <div className="cr-rail-bg" />
-        {/* Coloured fill — width is pct% of the rail span (100% - 28px) */}
-        <div
-          className="cr-rail-fill"
-          style={{
-            width: `calc(${pct / 100} * (100% - 28px))`,
-            background: col.accent,
-          }}
-        />
-
-        {/* Dots */}
-        <div className="cr-dots">
-          {steps.map((label, i) => {
-            const done = i < current;
-            const active = i === current;
-            return (
-              <div key={i} className="cr-dot-item">
-                <div
-                  className={`cr-dot-circle ${done ? "done" : active ? "active" : "idle"}`}
-                  style={
-                    active
-                      ? {
-                          background: col.accent,
-                          boxShadow: `0 0 0 4px ${col.light}, 0 0 0 7px ${col.accent}38`,
-                        }
-                      : {}
-                  }
-                >
-                  {done ? (
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
-                      <path
-                        d="M5 12l5 5L20 7"
-                        stroke="#fff"
-                        strokeWidth="3.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  ) : (
-                    <span
-                      className="cr-dot-n"
-                      style={active ? { color: "#fff" } : {}}
-                    >
-                      {i + 1}
-                    </span>
-                  )}
-                </div>
-                <span
-                  className={`cr-dot-lbl ${active ? "active" : done ? "done" : ""}`}
-                >
-                  {label}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Step navigation ───────────────────────────────────────────────────────────
 
 function StepNav({
@@ -1318,56 +1212,42 @@ const PT_GROUPS = [
   { label: "Other", key: "other" },
 ];
 
-function ProductTypeStep({
-  productType,
-  wearType,
-  onTypeChange,
-  onWearChange,
-}) {
+// Dropdown pairing of garment type + model shot type, used as a single step
+// after the image/model uploads (replaces the old ProductTypeStep button grid).
+function TypeShotStep({ productType, wearType, onTypeChange, onWearChange }) {
   const selected = PRODUCT_CATS.find((c) => c.id === productType);
   const isClothing = selected && CLOTHING_GROUPS.includes(selected.group);
+  const options = [
+    { value: "", label: "Select a type…" },
+    ...PT_GROUPS.flatMap((g) =>
+      PRODUCT_CATS.filter((c) => c.group === g.key).map((c) => ({
+        value: c.id,
+        label: `${c.label} — ${g.label}`,
+      })),
+    ),
+  ];
 
   return (
-    <div>
-      {PT_GROUPS.map((g) => (
-        <div key={g.key} style={{ marginBottom: "18px" }}>
-          <p className="cr-pt-group">{g.label}</p>
-          <div className="cr-pt-grid">
-            {PRODUCT_CATS.filter((c) => c.group === g.key).map((cat) => (
-              <button
-                key={cat.id}
-                className={`cr-pt-btn ${productType === cat.id ? "active" : ""}`}
-                title={cat.desc}
-                onClick={() => {
-                  onTypeChange(cat.id);
-                  onWearChange(cat.garmentType);
-                }}
-              >
-                {cat.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-
+    <div className="cr-settings-grid">
+      <CrSelect
+        label="Garment Type"
+        required
+        value={productType ?? ""}
+        onChange={(v) => {
+          onTypeChange(v || null);
+          const cat = PRODUCT_CATS.find((c) => c.id === v);
+          if (cat) onWearChange(cat.garmentType);
+        }}
+        options={options}
+      />
       {isClothing && (
-        <div className="cr-weartype-box">
-          <FieldLabel hint="how should the model display this garment?">
-            Model Shot Type
-          </FieldLabel>
-          <div className="cr-weartype-grid">
-            {WEAR_TYPES.map((w) => (
-              <button
-                key={w.id}
-                className={`cr-weartype-btn ${wearType === w.id ? "active" : ""}`}
-                onClick={() => onWearChange(w.id)}
-              >
-                <span className="cr-weartype-label">{w.label}</span>
-                <span className="cr-weartype-desc">{w.desc}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <CrSelect
+          label="Model Shot Type"
+          hint="how should the model display this garment?"
+          value={wearType}
+          onChange={onWearChange}
+          options={WEAR_TYPES.map((w) => ({ value: w.id, label: w.label }))}
+        />
       )}
     </div>
   );
@@ -1376,8 +1256,14 @@ function ProductTypeStep({
 // ── Model Selector ────────────────────────────────────────────────────────────
 
 function ModelSelector({ models, selectedKey, onSelect }) {
-  const [tab, setTab] = useState("saved");
+  const defaultModels = useRouteLoaderData("routes/app.studio.create")?.defaultModels ?? [];
+  const [tab, setTab] = useState(defaultModels.length ? "library" : "saved");
   const [newUrl, setNewUrl] = useState(null);
+  const [libGender, setLibGender] = useState("all");
+  const [libPick, setLibPick] = useState(null); // model_key of the picked library model
+  const libShown = defaultModels.filter((m) => libGender === "all" || m.gender === libGender);
+  const activatedCount = defaultModels.filter((m) => m.activated).length;
+  const pickedLib = libPick && selectedKey === "__custom__" ? defaultModels.find((m) => m.model_key === libPick) : null;
 
   // Merge both gender brackets into one flat list, keep only slots that
   // actually have a photo, and drop duplicate photos. Slots always have
@@ -1398,6 +1284,15 @@ function ModelSelector({ models, selectedKey, onSelect }) {
   return (
     <div>
       <div className="cr-model-tabs">
+        {defaultModels.length > 0 && (
+          <button
+            type="button"
+            className={`cr-model-tab ${tab === "library" ? "active" : ""}`}
+            onClick={() => setTab("library")}
+          >
+            Model library
+          </button>
+        )}
         <button
           className={`cr-model-tab ${tab === "saved" ? "active" : ""}`}
           onClick={() => setTab("saved")}
@@ -1412,7 +1307,50 @@ function ModelSelector({ models, selectedKey, onSelect }) {
         </button>
       </div>
 
-      {tab === "upload" ? (
+      {tab === "library" ? (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            {[["all", "All"], ["female", "Women"], ["male", "Men"]].map(([v, l]) => (
+              <button key={v} type="button" className={`cr-choice-btn ${libGender === v ? "active" : ""}`} onClick={() => setLibGender(v)}>
+                {l}
+              </button>
+            ))}
+            <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--ink-500)" }}>
+              {activatedCount > 0 ? `Your ${activatedCount} activated model${activatedCount === 1 ? "" : "s"} are shown first` : "Activate favourites in AI Studio → Models"}
+            </span>
+          </div>
+          <div className="cr-model-grid">
+            {libShown.map((m) => {
+              const sel = pickedLib?.model_key === m.model_key;
+              const pick = () => { setLibPick(m.model_key); onSelect("__custom__", m.image_url, m.gender); };
+              return (
+                <div
+                  key={m.model_key}
+                  className={`cr-model-card ${sel ? "selected" : ""}`}
+                  title={`${m.name} — ${m.look}, ${m.age_group}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={sel}
+                  onClick={pick}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } }}
+                >
+                  <div className="cr-model-thumb">
+                    <img src={m.thumb_url || m.image_url} alt={m.name} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    {sel && <div className="cr-model-tick">✓</div>}
+                    {m.activated && !sel && <span className="cr-model-fav" aria-label="Activated">★</span>}
+                  </div>
+                  <div className="cr-model-name">{m.name}</div>
+                </div>
+              );
+            })}
+          </div>
+          {pickedLib && (
+            <div className="cr-ok-banner">
+              ✓ Selected: <strong>{pickedLib.name}</strong> · {pickedLib.look}, {pickedLib.age_group}
+            </div>
+          )}
+        </div>
+      ) : tab === "upload" ? (
         <div>
           <p
             style={{
@@ -1435,6 +1373,7 @@ function ModelSelector({ models, selectedKey, onSelect }) {
             value={newUrl}
             onChange={(url) => {
               setNewUrl(url);
+              setLibPick(null);
               onSelect("__custom__", url, "female");
             }}
           />
@@ -1504,81 +1443,6 @@ function ModelSelector({ models, selectedKey, onSelect }) {
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Review summary helpers ────────────────────────────────────────────────────
-
-function ReviewThumb({ label, src }) {
-  if (!src) return null;
-  return (
-    <div style={{ textAlign: "center" }}>
-      <img
-        src={src}
-        alt={label}
-        style={{
-          width: 72,
-          height: 90,
-          objectFit: "cover",
-          borderRadius: 8,
-          border: "1px solid var(--border-subtle)",
-          display: "block",
-        }}
-      />
-      <span
-        style={{
-          fontSize: "10px",
-          color: "var(--ink-300)",
-          marginTop: "4px",
-          display: "block",
-        }}
-      >
-        {label}
-      </span>
-    </div>
-  );
-}
-
-function ReviewTable({ rows }) {
-  return (
-    <div
-      style={{
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "8px",
-        overflow: "hidden",
-        marginTop: "16px",
-      }}
-    >
-      {rows
-        .filter(([, v]) => v)
-        .map(([k, v], i) => (
-          <div
-            key={i}
-            style={{
-              display: "flex",
-              padding: "9px 14px",
-              borderBottom: i < rows.length - 1 ? "1px solid var(--surface-2)" : "none",
-            }}
-          >
-            <span
-              style={{
-                width: "130px",
-                flexShrink: 0,
-                fontSize: "12px",
-                color: "var(--ink-300)",
-                fontWeight: 500,
-              }}
-            >
-              {k}
-            </span>
-            <span
-              style={{ fontSize: "12px", color: "var(--ink-900)", fontWeight: 500 }}
-            >
-              {v}
-            </span>
-          </div>
-        ))}
     </div>
   );
 }
@@ -1734,11 +1598,43 @@ function OutputScreen({
 }) {
   const col = WF_COLORS[wfId] ?? BRAND;
   const fetcher = useFetcher();
+  const productFetcher = useFetcher();
+  const celebrate = useCelebrate();
   const [saved, setSaved] = useState(false);
+  const [attachedTo, setAttachedTo] = useState(null);
 
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.ok) setSaved(true);
-  }, [fetcher.state, fetcher.data]);
+    if (result) celebrate({ title: "Your image is ready", body: "Save it to your library to keep it for later." });
+  }, [result]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.ok) {
+      setSaved(true);
+      celebrate({ title: "Saved to library", body: "Find it any time in AI Studio." });
+    }
+  }, [fetcher.state, fetcher.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (productFetcher.state === "idle" && productFetcher.data?.ok && attachedTo) {
+      setSaved(true);
+      celebrate({ title: "Added to your product", body: `The image is now in ${attachedTo}'s media.` });
+    }
+  }, [productFetcher.state, productFetcher.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Shopify's own product picker (App Bridge), then attach via the existing
+  // save-gallery endpoint, which adds the image to the product's media.
+  const attachToProduct = async () => {
+    const picker = typeof window !== "undefined" ? window.shopify?.resourcePicker : null;
+    if (!picker) return;
+    const selection = await picker({ type: "product", multiple: false, action: "select" });
+    const product = selection?.[0];
+    if (!product?.id) return;
+    setAttachedTo(product.title ?? "the product");
+    productFetcher.submit(
+      { _action: "save-gallery", session_id: sessionId, result_image_url: result, shopify_product_gid: product.id },
+      { method: "POST", action: "/api/studio", encType: "application/json" },
+    );
+  };
 
   const save = () =>
     fetcher.submit(
@@ -1813,9 +1709,10 @@ function OutputScreen({
           </svg>
         </div>
         <div>
-          <p className="cr-complete-title">Generation complete</p>
+          <p className="cr-complete-title">Your image is ready</p>
           <p className="cr-complete-sub">
-            Your asset is ready to download or save to your library.
+            Download it in HD, save it to your library, or add it straight to a
+            product.
           </p>
         </div>
       </div>
@@ -1893,6 +1790,19 @@ function OutputScreen({
                 />
               </svg>
               Download HD
+            </button>
+            <button
+              type="button"
+              className="cr-btn cr-btn-outline"
+              onClick={attachToProduct}
+              disabled={productFetcher.state !== "idle" || !sessionId}
+            >
+              <FsIcon name="box" size={14} style={{ marginRight: 5 }} />
+              {productFetcher.state !== "idle"
+                ? "Adding…"
+                : attachedTo && productFetcher.data?.ok
+                  ? "Added to product"
+                  : "Use on product"}
             </button>
             <button
               className="cr-btn-save"
@@ -2612,6 +2522,7 @@ function WorkflowModelGeneration({ models }) {
     background: "clean-white",
     aspectRatio: "3:4",
   });
+  const MG_INPUT_STEP = 3;
   const [result, setResult] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const [pendingSessionId, setPendingSessionId] = useState(null);
@@ -2634,8 +2545,8 @@ function WorkflowModelGeneration({ models }) {
         setPendingSessionId(fetcher.data.session_id);
       } else if (fetcher.data.error) {
         setError(fetcher.data.error);
-        setStep(4);
-      } // back to Review on failure
+        setStep(MG_INPUT_STEP);
+      } // back to the input step on failure
     }
   }, [fetcher.state, fetcher.data]);
 
@@ -2666,11 +2577,10 @@ function WorkflowModelGeneration({ models }) {
         setResult(statusFetcher.data.result_image);
         setSessionId(statusFetcher.data.session_id ?? null);
         setPendingSessionId(null);
-        setStep(6);
       } else if (statusFetcher.data.status === "failed") {
         setError(statusFetcher.data.error);
         setPendingSessionId(null);
-        setStep(4); // back to Review on failure
+        setStep(MG_INPUT_STEP); // back to the input step on failure
       }
     }
   }, [statusFetcher.state, statusFetcher.data]);
@@ -2749,12 +2659,10 @@ function WorkflowModelGeneration({ models }) {
   };
 
   const S = (f, v) => setSettings((p) => ({ ...p, [f]: v }));
-  const steps = WORKFLOWS[0].steps;
 
-  if (step === 6 && result)
+  if (result)
     return (
       <div>
-        <Stepper steps={steps} wfId={wfId} current={6} />
         <Card>
           <OutputScreen
             result={result}
@@ -2794,7 +2702,6 @@ function WorkflowModelGeneration({ models }) {
   if (isGenerating)
     return (
       <div>
-        <Stepper steps={steps} wfId={wfId} current={5} />
         <Card>
           <GeneratingScreen wfId={wfId} />
         </Card>
@@ -2803,27 +2710,9 @@ function WorkflowModelGeneration({ models }) {
 
   return (
     <div>
-      <Stepper steps={steps} wfId={wfId} current={step} />
       {error && <ErrBanner msg={error} onDismiss={() => setError(null)} />}
 
       {step === 0 && (
-        <Card>
-          <SectionTitle>What are you selling?</SectionTitle>
-          <SectionDesc>
-            Select your product type so the AI applies the right drape, fit and
-            framing.
-          </SectionDesc>
-          <ProductTypeStep
-            productType={productType}
-            wearType={wearType}
-            onTypeChange={setProductType}
-            onWearChange={setWearType}
-          />
-          <StepNav onNext={() => setStep(1)} nextDisabled={!productType} />
-        </Card>
-      )}
-
-      {step === 1 && (
         <Card>
           <SectionTitle>Upload Product Images</SectionTitle>
           <SectionDesc>
@@ -2964,15 +2853,11 @@ function WorkflowModelGeneration({ models }) {
               </div>
             )}
           </div>
-          <StepNav
-            onBack={() => setStep(0)}
-            onNext={() => setStep(2)}
-            nextDisabled={!frontUrl}
-          />
+          <StepNav onNext={() => setStep(1)} nextDisabled={!frontUrl} />
         </Card>
       )}
 
-      {step === 2 && (
+      {step === 1 && (
         <Card>
           <SectionTitle>Select Model</SectionTitle>
           <SectionDesc>
@@ -2988,16 +2873,36 @@ function WorkflowModelGeneration({ models }) {
             }}
           />
           <StepNav
+            onBack={() => setStep(0)}
+            onNext={() => setStep(2)}
+            nextDisabled={!selectedModel}
+          />
+        </Card>
+      )}
+
+      {step === 2 && (
+        <Card>
+          <SectionTitle>Garment &amp; Shot Type</SectionTitle>
+          <SectionDesc>
+            Select what this is and how the model should display it.
+          </SectionDesc>
+          <TypeShotStep
+            productType={productType}
+            wearType={wearType}
+            onTypeChange={setProductType}
+            onWearChange={setWearType}
+          />
+          <StepNav
             onBack={() => setStep(1)}
             onNext={() => setStep(3)}
-            nextDisabled={!selectedModel}
+            nextDisabled={!productType}
           />
         </Card>
       )}
 
       {step === 3 && (
         <Card>
-          <SectionTitle>Generation Settings</SectionTitle>
+          <SectionTitle>Details &amp; Settings</SectionTitle>
           <SectionDesc>
             Adjust how the AI generates the final image.
           </SectionDesc>
@@ -3025,31 +2930,6 @@ function WorkflowModelGeneration({ models }) {
               ]}
             />
             <CrSelect
-              label="Ethnicity"
-              value={settings.ethnicity}
-              onChange={(v) => S("ethnicity", v)}
-              options={[
-                { value: "any", label: "Any / Model Default" },
-                { value: "south-asian", label: "South Asian" },
-                { value: "east-asian", label: "East Asian" },
-                { value: "caucasian", label: "Caucasian" },
-                { value: "african", label: "African" },
-                { value: "latin", label: "Latin" },
-              ]}
-            />
-            <CrSelect
-              label="Body Type"
-              value={settings.bodyType}
-              onChange={(v) => S("bodyType", v)}
-              options={[
-                { value: "slim", label: "Slim" },
-                { value: "average", label: "Average" },
-                { value: "athletic", label: "Athletic" },
-                { value: "curvy", label: "Curvy" },
-                { value: "plus-size", label: "Plus Size" },
-              ]}
-            />
-            <CrSelect
               label="Pose"
               value={settings.pose}
               onChange={(v) => S("pose", v)}
@@ -3074,64 +2954,7 @@ function WorkflowModelGeneration({ models }) {
                 { value: "studio", label: "Studio Lighting" },
               ]}
             />
-            <CrSelect
-              label="Aspect Ratio"
-              value={settings.aspectRatio}
-              onChange={(v) => S("aspectRatio", v)}
-              options={[
-                { value: "1:1", label: "1:1 — Square" },
-                { value: "3:4", label: "3:4 — Portrait" },
-                { value: "4:5", label: "4:5 — Instagram" },
-                { value: "9:16", label: "9:16 — Stories" },
-              ]}
-            />
           </div>
-          <StepNav onBack={() => setStep(2)} onNext={() => setStep(4)} />
-        </Card>
-      )}
-
-      {step === 4 && (
-        <Card>
-          <SectionTitle>Review & Generate</SectionTitle>
-          <SectionDesc>
-            Confirm everything looks right before generating.
-          </SectionDesc>
-          <div
-            style={{
-              display: "flex",
-              gap: "12px",
-              marginBottom: "4px",
-              flexWrap: "wrap",
-            }}
-          >
-            <ReviewThumb label="Front" src={frontUrl} />
-            {backUrl && <ReviewThumb label="Back" src={backUrl} />}
-            {extraUrls.map((u, i) => (
-              <ReviewThumb key={i} label={`Detail ${i + 1}`} src={u} />
-            ))}
-            <ReviewThumb
-              label="Model"
-              src={
-                selectedModel !== "__custom__"
-                  ? (models[selectedModel]?.image_url ?? null)
-                  : modelUrl
-              }
-            />
-          </div>
-          <ReviewTable
-            rows={[
-              [
-                "Product",
-                PRODUCT_CATS.find((c) => c.id === productType)?.label ?? "-",
-              ],
-              ["Shot Type", wearType],
-              ["Gender", settings.gender],
-              ["Age Group", settings.ageGroup],
-              ["Pose", settings.pose],
-              ["Background", settings.background],
-              ["Aspect Ratio", settings.aspectRatio],
-            ]}
-          />
           <InfographicAddon
             checked={withInfographic}
             onChange={(v) => {
@@ -3148,11 +2971,8 @@ function WorkflowModelGeneration({ models }) {
             onReferenceImageChange={setInfoReferenceUrl}
           />
           <StepNav
-            onBack={() => setStep(3)}
-            onNext={() => {
-              setStep(5);
-              doGenerate();
-            }}
+            onBack={() => setStep(2)}
+            onNext={doGenerate}
             nextLabel="Generate Image"
             isGenerate
           />
@@ -3211,8 +3031,8 @@ function WorkflowFlatLay({ models }) {
         setPendingSessionId(fetcher.data.session_id);
       } else if (fetcher.data.error) {
         setError(fetcher.data.error);
-        setStep(5);
-      } // back to Review on failure
+        setStep(3);
+      } // back to the input step on failure
     }
   }, [fetcher.state, fetcher.data]);
 
@@ -3241,11 +3061,10 @@ function WorkflowFlatLay({ models }) {
         setResult(statusFetcher.data.result_image);
         setSessionId(statusFetcher.data.session_id ?? null);
         setPendingSessionId(null);
-        setStep(7);
       } else if (statusFetcher.data.status === "failed") {
         setError(statusFetcher.data.error);
         setPendingSessionId(null);
-        setStep(5); // back to Review on failure
+        setStep(3); // back to the input step on failure
       }
     }
   }, [statusFetcher.state, statusFetcher.data]);
@@ -3311,12 +3130,10 @@ function WorkflowFlatLay({ models }) {
 
   const D = (f, v) => setDetails((p) => ({ ...p, [f]: v }));
   const S = (f, v) => setSettings((p) => ({ ...p, [f]: v }));
-  const steps = WORKFLOWS[1].steps;
 
-  if (step === 7 && result)
+  if (result)
     return (
       <div>
-        <Stepper steps={steps} wfId={wfId} current={7} />
         <Card>
           <OutputScreen
             result={result}
@@ -3356,7 +3173,6 @@ function WorkflowFlatLay({ models }) {
   if (isGenerating)
     return (
       <div>
-        <Stepper steps={steps} wfId={wfId} current={6} />
         <Card>
           <GeneratingScreen wfId={wfId} />
         </Card>
@@ -3365,27 +3181,9 @@ function WorkflowFlatLay({ models }) {
 
   return (
     <div>
-      <Stepper steps={steps} wfId={wfId} current={step} />
       {error && <ErrBanner msg={error} onDismiss={() => setError(null)} />}
 
       {step === 0 && (
-        <Card>
-          <SectionTitle>What are you selling?</SectionTitle>
-          <SectionDesc>
-            Select your product type so the AI applies the right drape, fit and
-            framing.
-          </SectionDesc>
-          <ProductTypeStep
-            productType={productType}
-            wearType={wearType}
-            onTypeChange={setProductType}
-            onWearChange={setWearType}
-          />
-          <StepNav onNext={() => setStep(1)} nextDisabled={!productType} />
-        </Card>
-      )}
-
-      {step === 1 && (
         <Card>
           <SectionTitle>Upload Flat Lay Image</SectionTitle>
           <SectionDesc>
@@ -3399,15 +3197,11 @@ function WorkflowFlatLay({ models }) {
             onChange={setFlatUrl}
             note="Garment laid flat on a clean surface, shot from above. Even slightly wrinkled flat-lays work well."
           />
-          <StepNav
-            onBack={() => setStep(0)}
-            onNext={() => setStep(2)}
-            nextDisabled={!flatUrl}
-          />
+          <StepNav onNext={() => setStep(1)} nextDisabled={!flatUrl} />
         </Card>
       )}
 
-      {step === 2 && (
+      {step === 1 && (
         <Card>
           <SectionTitle>Select Model</SectionTitle>
           <ModelSelector
@@ -3420,19 +3214,39 @@ function WorkflowFlatLay({ models }) {
             }}
           />
           <StepNav
+            onBack={() => setStep(0)}
+            onNext={() => setStep(2)}
+            nextDisabled={!selectedModel}
+          />
+        </Card>
+      )}
+
+      {step === 2 && (
+        <Card>
+          <SectionTitle>Garment &amp; Shot Type</SectionTitle>
+          <SectionDesc>
+            Select what this is and how the model should display it.
+          </SectionDesc>
+          <TypeShotStep
+            productType={productType}
+            wearType={wearType}
+            onTypeChange={setProductType}
+            onWearChange={setWearType}
+          />
+          <StepNav
             onBack={() => setStep(1)}
             onNext={() => setStep(3)}
-            nextDisabled={!selectedModel}
+            nextDisabled={!productType}
           />
         </Card>
       )}
 
       {step === 3 && (
         <Card>
-          <SectionTitle>Product Details</SectionTitle>
+          <SectionTitle>Details &amp; Settings</SectionTitle>
           <SectionDesc>
             Prompt is required — the more context you give, the more accurately
-            the AI can recreate the garment. Other fields are optional.
+            the AI can recreate the garment.
           </SectionDesc>
           <div className="cr-two-col">
             <CrInput
@@ -3449,20 +3263,6 @@ function WorkflowFlatLay({ models }) {
               placeholder="e.g. A-line, slim-fit, flowy…"
               hint="optional"
             />
-            <CrInput
-              label="Sleeve Details"
-              value={details.sleeve}
-              onChange={(v) => D("sleeve", v)}
-              placeholder="e.g. Bell sleeves, cold-shoulder…"
-              hint="optional"
-            />
-            <CrInput
-              label="Embroidery / Print"
-              value={details.embroidery}
-              onChange={(v) => D("embroidery", v)}
-              placeholder="e.g. Gold zari border, floral print…"
-              hint="optional"
-            />
           </div>
           <CrTextarea
             label="Prompt"
@@ -3471,17 +3271,6 @@ function WorkflowFlatLay({ models }) {
             onChange={(v) => D("notes", v)}
             placeholder="e.g. Drape the dupatta over the left shoulder."
           />
-          <StepNav
-            onBack={() => setStep(2)}
-            onNext={() => setStep(4)}
-            nextDisabled={!details.notes.trim()}
-          />
-        </Card>
-      )}
-
-      {step === 4 && (
-        <Card>
-          <SectionTitle>Generation Settings</SectionTitle>
           <div className="cr-settings-grid">
             <CrSelect
               label="Pose"
@@ -3506,52 +3295,7 @@ function WorkflowFlatLay({ models }) {
                 { value: "lifestyle-outdoor", label: "Lifestyle Outdoor" },
               ]}
             />
-            <CrSelect
-              label="Aspect Ratio"
-              value={settings.aspectRatio}
-              onChange={(v) => S("aspectRatio", v)}
-              options={[
-                { value: "1:1", label: "1:1 — Square" },
-                { value: "3:4", label: "3:4 — Portrait" },
-                { value: "4:5", label: "4:5 — Instagram" },
-                { value: "9:16", label: "9:16 — Stories" },
-              ]}
-            />
-            <CrSelect
-              label="Resolution"
-              value={settings.resolution}
-              onChange={(v) => S("resolution", v)}
-              options={[
-                { value: "standard", label: "Standard (1024 px)" },
-                { value: "high", label: "High (2048 px)" },
-                { value: "ultra", label: "Ultra HD (4096 px)" },
-              ]}
-            />
           </div>
-          <StepNav onBack={() => setStep(3)} onNext={() => setStep(5)} />
-        </Card>
-      )}
-
-      {step === 5 && (
-        <Card>
-          <SectionTitle>Review & Generate</SectionTitle>
-          <div style={{ display: "flex", gap: "16px", marginBottom: "4px" }}>
-            <ReviewThumb label="Flat Lay" src={flatUrl} />
-          </div>
-          <ReviewTable
-            rows={[
-              [
-                "Product",
-                PRODUCT_CATS.find((c) => c.id === productType)?.label ?? "-",
-              ],
-              ["Shot Type", wearType],
-              ["Fabric", details.fabric],
-              ["Fit", details.fit],
-              ["Pose", settings.pose],
-              ["Background", settings.background],
-              ["Aspect Ratio", settings.aspectRatio],
-            ]}
-          />
           <InfographicAddon
             checked={withInfographic}
             onChange={(v) => {
@@ -3568,12 +3312,10 @@ function WorkflowFlatLay({ models }) {
             onReferenceImageChange={setInfoReferenceUrl}
           />
           <StepNav
-            onBack={() => setStep(4)}
-            onNext={() => {
-              setStep(6);
-              doGenerate();
-            }}
+            onBack={() => setStep(2)}
+            onNext={doGenerate}
             nextLabel="Generate Image"
+            nextDisabled={!details.notes.trim()}
             isGenerate
           />
         </Card>
@@ -3624,8 +3366,8 @@ function WorkflowMannequin({ models }) {
         setPendingSessionId(fetcher.data.session_id);
       } else if (fetcher.data.error) {
         setError(fetcher.data.error);
-        setStep(4);
-      } // back to Review on failure
+        setStep(3);
+      } // back to the input step on failure
     }
   }, [fetcher.state, fetcher.data]);
 
@@ -3654,11 +3396,10 @@ function WorkflowMannequin({ models }) {
         setResult(statusFetcher.data.result_image);
         setSessionId(statusFetcher.data.session_id ?? null);
         setPendingSessionId(null);
-        setStep(6);
       } else if (statusFetcher.data.status === "failed") {
         setError(statusFetcher.data.error);
         setPendingSessionId(null);
-        setStep(4); // back to Review on failure
+        setStep(3); // back to the input step on failure
       }
     }
   }, [statusFetcher.state, statusFetcher.data]);
@@ -3712,12 +3453,10 @@ function WorkflowMannequin({ models }) {
   };
 
   const S = (f, v) => setSettings((p) => ({ ...p, [f]: v }));
-  const steps = WORKFLOWS[2].steps;
 
-  if (step === 6 && result)
+  if (result)
     return (
       <div>
-        <Stepper steps={steps} wfId={wfId} current={6} />
         <Card>
           <OutputScreen
             result={result}
@@ -3757,7 +3496,6 @@ function WorkflowMannequin({ models }) {
   if (isGenerating)
     return (
       <div>
-        <Stepper steps={steps} wfId={wfId} current={5} />
         <Card>
           <GeneratingScreen wfId={wfId} />
         </Card>
@@ -3766,27 +3504,9 @@ function WorkflowMannequin({ models }) {
 
   return (
     <div>
-      <Stepper steps={steps} wfId={wfId} current={step} />
       {error && <ErrBanner msg={error} onDismiss={() => setError(null)} />}
 
       {step === 0 && (
-        <Card>
-          <SectionTitle>What are you selling?</SectionTitle>
-          <SectionDesc>
-            Select your product type so the AI applies the right drape, fit and
-            framing.
-          </SectionDesc>
-          <ProductTypeStep
-            productType={productType}
-            wearType={wearType}
-            onTypeChange={setProductType}
-            onWearChange={setWearType}
-          />
-          <StepNav onNext={() => setStep(1)} nextDisabled={!productType} />
-        </Card>
-      )}
-
-      {step === 1 && (
         <Card>
           <SectionTitle>Upload Ghost Mannequin Image</SectionTitle>
           <SectionDesc>
@@ -3811,15 +3531,11 @@ function WorkflowMannequin({ models }) {
             value={mannUrl}
             onChange={setMannUrl}
           />
-          <StepNav
-            onBack={() => setStep(0)}
-            onNext={() => setStep(2)}
-            nextDisabled={!mannUrl}
-          />
+          <StepNav onNext={() => setStep(1)} nextDisabled={!mannUrl} />
         </Card>
       )}
 
-      {step === 2 && (
+      {step === 1 && (
         <Card>
           <SectionTitle>Select Model</SectionTitle>
           <ModelSelector
@@ -3832,16 +3548,36 @@ function WorkflowMannequin({ models }) {
             }}
           />
           <StepNav
+            onBack={() => setStep(0)}
+            onNext={() => setStep(2)}
+            nextDisabled={!selectedModel}
+          />
+        </Card>
+      )}
+
+      {step === 2 && (
+        <Card>
+          <SectionTitle>Garment &amp; Shot Type</SectionTitle>
+          <SectionDesc>
+            Select what this is and how the model should display it.
+          </SectionDesc>
+          <TypeShotStep
+            productType={productType}
+            wearType={wearType}
+            onTypeChange={setProductType}
+            onWearChange={setWearType}
+          />
+          <StepNav
             onBack={() => setStep(1)}
             onNext={() => setStep(3)}
-            nextDisabled={!selectedModel}
+            nextDisabled={!productType}
           />
         </Card>
       )}
 
       {step === 3 && (
         <Card>
-          <SectionTitle>Generation Settings</SectionTitle>
+          <SectionTitle>Details &amp; Settings</SectionTitle>
           <div className="cr-settings-grid">
             <CrSelect
               label="Pose"
@@ -3852,16 +3588,6 @@ function WorkflowMannequin({ models }) {
                 { value: "standing-hands-on-hips", label: "Hands on Hips" },
                 { value: "walking", label: "Walking" },
                 { value: "three-quarter", label: "Three-Quarter Turn" },
-              ]}
-            />
-            <CrSelect
-              label="Expression"
-              value={settings.expression}
-              onChange={(v) => S("expression", v)}
-              options={[
-                { value: "natural", label: "Natural / Neutral" },
-                { value: "smiling", label: "Smiling" },
-                { value: "editorial", label: "Editorial" },
               ]}
             />
             <CrSelect
@@ -3876,41 +3602,7 @@ function WorkflowMannequin({ models }) {
                 { value: "lifestyle-outdoor", label: "Lifestyle Outdoor" },
               ]}
             />
-            <CrSelect
-              label="Camera Angle"
-              value={settings.cameraAngle}
-              onChange={(v) => S("cameraAngle", v)}
-              options={[
-                { value: "front", label: "Front (Full Body)" },
-                { value: "three-quarter", label: "Three-Quarter" },
-                { value: "close-up", label: "Waist Up" },
-                { value: "editorial", label: "Editorial / Low Angle" },
-              ]}
-            />
           </div>
-          <StepNav onBack={() => setStep(2)} onNext={() => setStep(4)} />
-        </Card>
-      )}
-
-      {step === 4 && (
-        <Card>
-          <SectionTitle>Review & Generate</SectionTitle>
-          <div style={{ display: "flex", gap: "16px", marginBottom: "4px" }}>
-            <ReviewThumb label="Mannequin" src={mannUrl} />
-          </div>
-          <ReviewTable
-            rows={[
-              [
-                "Product",
-                PRODUCT_CATS.find((c) => c.id === productType)?.label ?? "-",
-              ],
-              ["Shot Type", wearType],
-              ["Pose", settings.pose],
-              ["Expression", settings.expression],
-              ["Background", settings.background],
-              ["Camera Angle", settings.cameraAngle],
-            ]}
-          />
           <InfographicAddon
             checked={withInfographic}
             onChange={(v) => {
@@ -3927,11 +3619,8 @@ function WorkflowMannequin({ models }) {
             onReferenceImageChange={setInfoReferenceUrl}
           />
           <StepNav
-            onBack={() => setStep(3)}
-            onNext={() => {
-              setStep(5);
-              doGenerate();
-            }}
+            onBack={() => setStep(2)}
+            onNext={doGenerate}
             nextLabel="Generate Image"
             isGenerate
           />
@@ -3953,8 +3642,6 @@ function WorkflowAccessories({ models }) {
   const igJob = useInfographicJob(); // infographic addon
 
   const [step, setStep] = useState(0);
-  const [productType, setProductType] = useState(null);
-  const [wearType, setWearType] = useState("top");
   const [category, setCategory] = useState("watch");
   const [accUrl, setAccUrl] = useState(null);
   const [selectedModel, setSelectedModel] = useState(null);
@@ -3992,7 +3679,7 @@ function WorkflowAccessories({ models }) {
         setPendingSessionId(fetcher.data.session_id);
       } else if (fetcher.data.error) {
         setError(fetcher.data.error);
-        setStep(5);
+        setStep(3);
       }
     }
   }, [fetcher.state, fetcher.data]);
@@ -4022,11 +3709,10 @@ function WorkflowAccessories({ models }) {
         setResult(statusFetcher.data.result_image);
         setSessionId(statusFetcher.data.session_id ?? null);
         setPendingSessionId(null);
-        setStep(7);
       } else if (statusFetcher.data.status === "failed") {
         setError(statusFetcher.data.error);
         setPendingSessionId(null);
-        setStep(5);
+        setStep(3);
       }
     }
   }, [statusFetcher.state, statusFetcher.data]);
@@ -4046,10 +3732,8 @@ function WorkflowAccessories({ models }) {
   // ── Submit handlers ───────────────────────────────────────────────────────
   const doModelGenerate = () => {
     setError(null);
-    const productPrompt = buildProductPrompt(productType, null);
-    const fullPrompt = [productPrompt, `${category}: ${placement}`]
-      .filter(Boolean)
-      .join("; ");
+    const categoryLabel = category.charAt(0).toUpperCase() + category.slice(1);
+    const fullPrompt = `${categoryLabel}, full-body model shot; ${category}: ${placement}`;
     fetcher.submit(
       {
         _action: "generate",
@@ -4084,21 +3768,11 @@ function WorkflowAccessories({ models }) {
 
   const S = (f, v) => setSettings((p) => ({ ...p, [f]: v }));
 
-  const modelSteps = [
-    "Product Type",
-    "Accessory Image",
-    "Model",
-    "Placement",
-    "Settings",
-    "Review",
-    "Output",
-  ];
   const isModelGenerating = fetcher.state !== "idle" || !!pendingSessionId;
 
-  if (step === 7 && result)
+  if (result)
     return (
       <div>
-        <Stepper steps={modelSteps} wfId={wfId} current={7} />
         <Card>
           <OutputScreen
             result={result}
@@ -4138,7 +3812,6 @@ function WorkflowAccessories({ models }) {
   if (isModelGenerating)
     return (
       <div>
-        <Stepper steps={modelSteps} wfId={wfId} current={6} />
         <Card>
           <GeneratingScreen wfId={wfId} />
         </Card>
@@ -4147,49 +3820,14 @@ function WorkflowAccessories({ models }) {
 
   return (
     <div>
-      <Stepper steps={modelSteps} wfId={wfId} current={step} />
       {error && <ErrBanner msg={error} onDismiss={() => setError(null)} />}
 
       {step === 0 && (
         <Card>
-          <SectionTitle>What are you selling?</SectionTitle>
-          <SectionDesc>
-            Select your product type — pick from Accessories & Jewellery.
-          </SectionDesc>
-          <ProductTypeStep
-            productType={productType}
-            wearType={wearType}
-            onTypeChange={(t) => {
-              setProductType(t);
-              const cat = PRODUCT_CATS.find((c) => c.id === t);
-              if (cat?.accCategory) setCategory(cat.accCategory);
-            }}
-            onWearChange={setWearType}
-          />
-          <StepNav onNext={() => setStep(1)} nextDisabled={!productType} />
-        </Card>
-      )}
-
-      {step === 1 && (
-        <Card>
           <SectionTitle>Upload Accessory Image</SectionTitle>
           <SectionDesc>
-            Select the accessory sub-type, then upload a clean product image.
+            Upload a clean product-only shot of the accessory.
           </SectionDesc>
-          <div style={{ marginBottom: "18px" }}>
-            <FieldLabel required>Accessory Type</FieldLabel>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-              {Object.keys(ACCESSORY_PLACEMENTS).map((cat) => (
-                <button
-                  key={cat}
-                  className={`cr-choice-btn ${category === cat ? "active" : ""}`}
-                  onClick={() => setCategory(cat)}
-                >
-                  {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
           <UploadZone
             label="Accessory Image"
             required
@@ -4197,15 +3835,11 @@ function WorkflowAccessories({ models }) {
             onChange={setAccUrl}
             note="Clean product-only shot on a plain white or transparent background, with the whole item in frame (handle, clasp, strap, chain, pendant). No model, no props, nothing covering it — the result can only be as accurate as this photo."
           />
-          <StepNav
-            onBack={() => setStep(0)}
-            onNext={() => setStep(2)}
-            nextDisabled={!accUrl}
-          />
+          <StepNav onNext={() => setStep(1)} nextDisabled={!accUrl} />
         </Card>
       )}
 
-      {step === 2 && (
+      {step === 1 && (
         <Card>
           <SectionTitle>Select Model</SectionTitle>
           <ModelSelector
@@ -4218,49 +3852,51 @@ function WorkflowAccessories({ models }) {
             }}
           />
           <StepNav
+            onBack={() => setStep(0)}
+            onNext={() => setStep(2)}
+            nextDisabled={!selectedModel}
+          />
+        </Card>
+      )}
+
+      {step === 2 && (
+        <Card>
+          <SectionTitle>Accessory Type &amp; Placement</SectionTitle>
+          <SectionDesc>
+            Select what this is and where it should appear on the model.
+          </SectionDesc>
+          <div className="cr-settings-grid">
+            <CrSelect
+              label="Accessory Type"
+              required
+              value={category}
+              onChange={setCategory}
+              options={Object.keys(ACCESSORY_PLACEMENTS).map((cat) => ({
+                value: cat,
+                label: cat.charAt(0).toUpperCase() + cat.slice(1),
+              }))}
+            />
+            <CrSelect
+              label="Placement"
+              value={placement}
+              onChange={setPlacement}
+              options={(ACCESSORY_PLACEMENTS[category] ?? []).map((p) => ({
+                value: p,
+                label: p,
+              }))}
+            />
+          </div>
+          <StepNav
             onBack={() => setStep(1)}
             onNext={() => setStep(3)}
-            nextDisabled={!selectedModel}
+            nextDisabled={!category || !placement}
           />
         </Card>
       )}
 
       {step === 3 && (
         <Card>
-          <SectionTitle>Placement</SectionTitle>
-          <SectionDesc>
-            Choose where the <strong>{category}</strong> should appear on the
-            model.
-          </SectionDesc>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
-              marginBottom: "8px",
-            }}
-          >
-            {(ACCESSORY_PLACEMENTS[category] ?? []).map((p) => (
-              <button
-                key={p}
-                className={`cr-choice-btn ${placement === p ? "active" : ""}`}
-                onClick={() => setPlacement(p)}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-          <StepNav
-            onBack={() => setStep(2)}
-            onNext={() => setStep(4)}
-            nextDisabled={!placement}
-          />
-        </Card>
-      )}
-
-      {step === 4 && (
-        <Card>
-          <SectionTitle>Generation Settings</SectionTitle>
+          <SectionTitle>Details &amp; Settings</SectionTitle>
           <div className="cr-settings-grid">
             <CrSelect
               label="Pose"
@@ -4284,41 +3920,7 @@ function WorkflowAccessories({ models }) {
                 { value: "luxury-studio", label: "Luxury Studio" },
               ]}
             />
-            <CrSelect
-              label="Styling"
-              value={settings.styling}
-              onChange={(v) => S("styling", v)}
-              options={[
-                { value: "editorial", label: "Editorial" },
-                { value: "commercial", label: "Commercial / Catalog" },
-                { value: "luxury", label: "Luxury / High-End" },
-                { value: "casual", label: "Casual / Lifestyle" },
-              ]}
-            />
           </div>
-          <StepNav onBack={() => setStep(3)} onNext={() => setStep(5)} />
-        </Card>
-      )}
-
-      {step === 5 && (
-        <Card>
-          <SectionTitle>Review & Generate</SectionTitle>
-          <div style={{ display: "flex", gap: "16px", marginBottom: "4px" }}>
-            <ReviewThumb label={category} src={accUrl} />
-          </div>
-          <ReviewTable
-            rows={[
-              [
-                "Product",
-                PRODUCT_CATS.find((c) => c.id === productType)?.label ?? "-",
-              ],
-              ["Accessory Type", category],
-              ["Placement", placement],
-              ["Pose", settings.pose],
-              ["Background", settings.background],
-              ["Styling", settings.styling],
-            ]}
-          />
           <InfographicAddon
             checked={withInfographic}
             onChange={(v) => {
@@ -4335,11 +3937,8 @@ function WorkflowAccessories({ models }) {
             onReferenceImageChange={setInfoReferenceUrl}
           />
           <StepNav
-            onBack={() => setStep(4)}
-            onNext={() => {
-              setStep(6);
-              doModelGenerate();
-            }}
+            onBack={() => setStep(2)}
+            onNext={doModelGenerate}
             nextLabel="Generate Try-On"
             isGenerate
           />
@@ -4382,14 +3981,13 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
       setIgKPs(igJob.result.key_points ?? []);
       setIgArchetype(igJob.result.archetype ?? null);
       setIgQuality(igJob.result.quality ?? null);
-      setIgStep(4);
     }
   }, [igJob.result]);
 
   useEffect(() => {
     if (igJob.error) {
       setIgError(igJob.error);
-      setIgStep(3); // back to review
+      setIgStep(2); // back to the input step
     }
   }, [igJob.error]);
 
@@ -4411,7 +4009,6 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
     });
   };
 
-  const igSteps = ["Source Image", "Description", "Options", "Review", "Output"];
   const isIgGenerating = igJob.isPending;
   const fmt = (d) =>
     d
@@ -4422,10 +4019,9 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
         })
       : "—";
 
-  if (igStep === 4 && igResults?.length)
+  if (igResults?.length)
     return (
       <div>
-        <Stepper steps={igSteps} wfId="infographic" current={4} />
         <Card>
           <OutputScreen
             result={null}
@@ -4581,7 +4177,6 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
   if (isIgGenerating)
     return (
       <div>
-        <Stepper steps={igSteps} wfId="infographic" current={3} />
         <Card>
           <GeneratingScreen wfId="infographic" />
         </Card>
@@ -4590,7 +4185,6 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
 
   return (
     <div>
-      <Stepper steps={igSteps} wfId="infographic" current={igStep} />
       {igError && (
         <ErrBanner msg={igError} onDismiss={() => setIgError(null)} />
       )}
@@ -4975,68 +4569,6 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
               style={{ resize: "vertical", lineHeight: 1.5, margin: 0 }}
             />
           </div>
-          <StepNav onBack={() => setIgStep(1)} onNext={() => setIgStep(3)} />
-        </Card>
-      )}
-
-      {igStep === 3 && (
-        <Card>
-          <SectionTitle>Review & Generate</SectionTitle>
-          <SectionDesc>
-            AI will extract key highlights from your description and compose the
-            infographic — entirely via OpenAI.
-          </SectionDesc>
-          <div
-            style={{
-              display: "flex",
-              gap: "12px",
-              marginBottom: "12px",
-              flexWrap: "wrap",
-            }}
-          >
-            <ReviewThumb label="Source" src={igImageUrl} />
-            {igReferenceUrl && (
-              <ReviewThumb label="Reference" src={igReferenceUrl} />
-            )}
-            <div style={{ flex: 1, minWidth: "180px" }}>
-              <ReviewTable
-                rows={[
-                  [
-                    "Source",
-                    useUpload ? "Uploaded image" : "Saved Fashn AI model",
-                  ],
-                  [
-                    "Design",
-                    igReferenceUrl
-                      ? "Matched to reference image"
-                      : "Auto-detected from the photo",
-                  ],
-                  [
-                    "Layout",
-                    igReferenceUrl
-                      ? "Single Infographic (reference mode)"
-                      : igCollage
-                        ? "Multi-Panel Collage (4 images)"
-                        : "Single Infographic",
-                  ],
-                  [
-                    "Output Size",
-                    SIZE_OPTIONS.find((s) => s.id === igSize)?.label ?? igSize,
-                  ],
-                  [
-                    "Background",
-                    igCustomStyle.length > 60
-                      ? igCustomStyle.slice(0, 60) + "…"
-                      : igCustomStyle,
-                  ],
-                  [
-                    "Description",
-                    igDesc.length > 80 ? igDesc.slice(0, 80) + "…" : igDesc,
-                  ],
-                ]}
-              />
-            </div>
-          </div>
           <p
             style={{
               fontSize: "12px",
@@ -5044,7 +4576,7 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
               background: "var(--surface-2)",
               padding: "10px 12px",
               borderRadius: "8px",
-              margin: "0 0 4px",
+              margin: "4px 0",
               lineHeight: 1.6,
             }}
           >
@@ -5052,11 +4584,8 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
             badges on the infographic. No sentences.
           </p>
           <StepNav
-            onBack={() => setIgStep(2)}
-            onNext={() => {
-              setIgStep(3);
-              doIgGenerate();
-            }}
+            onBack={() => setIgStep(1)}
+            onNext={doIgGenerate}
             nextLabel="Generate Infographic"
             isGenerate
           />
@@ -5068,220 +4597,18 @@ function WorkflowInfographic({ savedGenerations, products = [], ragStatus }) {
 
 // ── Workflow Selector ─────────────────────────────────────────────────────────
 
-const WF_ICONS = {
-  "model-generation": (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="7" r="4" stroke="currentColor" strokeWidth="1.8" />
-      <path
-        d="M4 21v-1a8 8 0 0116 0v1"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-      <path d="M18 2l2 2-5 5-2-2z" fill="currentColor" opacity=".6" />
-    </svg>
-  ),
-  "flat-lay": (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-      <rect
-        x="3"
-        y="8"
-        width="18"
-        height="10"
-        rx="2"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-      <path
-        d="M7 8V6a2 2 0 014 0v2M13 8V6a2 2 0 014 0v2"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-      <path
-        d="M8 13h8"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  ),
-  mannequin: (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="5" r="3" stroke="currentColor" strokeWidth="1.8" />
-      <path
-        d="M8 10h8l-1 5H9l-1-5z"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M10 15l-1 5M14 15l1 5"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  ),
-  accessories: (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.8" />
-      <circle
-        cx="12"
-        cy="12"
-        r="9"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeDasharray="3 2"
-      />
-      <path
-        d="M12 3v3M12 18v3M3 12h3M18 12h3"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  ),
-  infographic: (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-      <rect
-        x="3"
-        y="3"
-        width="18"
-        height="18"
-        rx="2"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-      <path
-        d="M7 17V13M10 17V9M13 17v-5M16 17V7"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  ),
-};
-
-const WF_NUMBERS = ["01", "02", "03", "04", "05"];
-
 function WorkflowSelector({ onSelect }) {
-  const [hovered, setHovered] = useState(null);
   return (
     <div>
       <div className="cr-sel-hero">
-        <p className="cr-sel-label">AI Studio</p>
-        <h2 className="cr-sel-title">Choose your workflow</h2>
+        <p className="cr-sel-label">Create new asset</p>
+        <h2 className="cr-sel-title">What would you like to make?</h2>
         <p className="cr-sel-sub">
-          Each workflow is a guided process — pick the one that matches your
-          asset type.
+          Pick the workflow that matches the photo you have — we&apos;ll guide
+          you step by step.
         </p>
       </div>
-
-      <div className="cr-wf-grid">
-        {WORKFLOWS.map((wf, idx) => {
-          const col = WF_COLORS[wf.id];
-          const isHov = hovered === wf.id;
-          return (
-            <div
-              key={wf.id}
-              className="cr-wf-card"
-              role="button"
-              tabIndex={0}
-              style={{
-                "--accent": col.accent,
-                "--light": col.light,
-                "--dark": col.dark,
-              }}
-              onMouseEnter={() => setHovered(wf.id)}
-              onMouseLeave={() => setHovered(null)}
-              onClick={() => onSelect(wf.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onSelect(wf.id);
-                }
-              }}
-            >
-              {/* Image area */}
-              <div className="cr-wf-img">
-                <span className="cr-wf-num-tag">{WF_NUMBERS[idx]}</span>
-                <div
-                  className="cr-wf-img-icon"
-                  style={{
-                    background: isHov ? col.accent : col.light,
-                    color: isHov ? "#fff" : col.accent,
-                  }}
-                >
-                  {WF_ICONS[wf.id]}
-                </div>
-              </div>
-
-              {/* Text content */}
-              <div className="cr-wf-content">
-                <h3 className="cr-wf-card-title">{wf.title}</h3>
-                <p className="cr-wf-card-desc">{wf.desc}</p>
-                <div className="cr-wf-badges">
-                  <span className="cr-wf-badge">
-                    <svg
-                      width="10"
-                      height="10"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      style={{
-                        display: "inline",
-                        marginRight: "3px",
-                        verticalAlign: "middle",
-                      }}
-                    >
-                      <circle
-                        cx="12"
-                        cy="12"
-                        r="9"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      />
-                      <path
-                        d="M12 7v5l3 3"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                    {col.time}
-                  </span>
-                  <span className="cr-wf-badge">{wf.steps.length} steps</span>
-                </div>
-                <button
-                  className={`cr-wf-cta ${isHov ? "hover" : ""}`}
-                  style={
-                    isHov
-                      ? { background: col.accent, borderColor: col.accent }
-                      : {}
-                  }
-                >
-                  Start workflow
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    style={{ marginLeft: "6px" }}
-                  >
-                    <path
-                      d="M5 12h14M13 6l6 6-6 6"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <WorkflowCards onSelect={onSelect} />
     </div>
   );
 }
@@ -5291,72 +4618,55 @@ function WorkflowSelector({ onSelect }) {
 export default function CreatePage() {
   const { models, savedGenerations, products, ragStatus } = useLoaderData();
   const navigate = useNavigate();
-  const [phase, setPhase] = useState("select");
-  const [wfType, setWfType] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // ?workflow=<id> deep-links straight into a wizard (AI Studio workflow cards).
+  const initialWf = WORKFLOWS.some((w) => w.id === searchParams.get("workflow"))
+    ? searchParams.get("workflow")
+    : null;
+  const [phase, setPhase] = useState(initialWf ? "workflow" : "select");
+  const [wfType, setWfType] = useState(initialWf);
   const wf = WORKFLOWS.find((w) => w.id === wfType);
   const col = WF_COLORS[wfType] ?? BRAND;
+
+  const selectWorkflow = (id) => {
+    setWfType(id);
+    setPhase("workflow");
+    setSearchParams({ workflow: id }, { replace: true, preventScrollReset: true });
+  };
+  const backToPicker = () => {
+    setPhase("select");
+    setSearchParams({}, { replace: true, preventScrollReset: true });
+  };
 
   return (
     <>
       <div className="cr-page">
         {/* Header */}
-        <div
-          className="cr-page-hdr"
-          style={
-            phase === "workflow"
-              ? { borderBottom: `2px solid ${col.accent}` }
-              : {}
-          }
-        >
+        <div className="cr-page-hdr">
           <button
+            type="button"
             className="cr-back"
-            onClick={() =>
-              phase === "workflow"
-                ? setPhase("select")
-                : navigate("/app/studio")
-            }
+            onClick={() => (phase === "workflow" ? backToPicker() : navigate("/app/studio"))}
           >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              style={{ marginRight: "5px" }}
-            >
-              <path
-                d="M19 12H5M5 12l6 6M5 12l6-6"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            {phase === "select" ? "Back to Studio" : "Change"}
+            <FsIcon name="arrowLeft" size={16} />
+            {phase === "select" ? "AI Studio" : "All workflows"}
           </button>
-          <div style={{ flex: 1, textAlign: "center" }}>
+          <span className="cr-crumb-sep">/</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <h1 className="cr-page-title">
-              {phase === "select"
-                ? "Create New Asset"
-                : (wf?.title ?? "Create")}
+              {phase === "select" ? "Create new asset" : (wf?.title ?? "Create")}
             </h1>
-            {phase === "workflow" && (
-              <p className="cr-page-sub" style={{ color: col.accent }}>
-                {wf?.steps?.length} steps · {col.time} estimated
-              </p>
-            )}
           </div>
-          <div style={{ width: "90px" }} />
+          {phase === "workflow" && (
+            <span className="cr-page-sub">
+              <FsIcon name="clock" size={13} />
+              {col.time} · {wf?.steps?.length} steps
+            </span>
+          )}
         </div>
 
         <div className="cr-body">
-          {phase === "select" && (
-            <WorkflowSelector
-              onSelect={(id) => {
-                setWfType(id);
-                setPhase("workflow");
-              }}
-            />
-          )}
+          {phase === "select" && <WorkflowSelector onSelect={selectWorkflow} />}
           {phase === "workflow" && wfType === "model-generation" && (
             <WorkflowModelGeneration models={models} />
           )}

@@ -11,6 +11,11 @@ import "./vto-design.css";
 // module and collides with the real route of the same base name.)
 import "./app.studio.create.css";
 import "./app.studio._index.css";
+// Brix-TryOn admin shell + UI kit — last so it wins over legacy styles.
+import "./fitsnap-ui.css";
+import "./fitsnap-onboarding.css";
+import "./fitsnap-dashboard.css";
+import "./fitsnap-models.css";
 
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 

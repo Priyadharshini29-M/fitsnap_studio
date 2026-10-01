@@ -51,7 +51,7 @@
         </div>
 
         <div class="tryfit-privacy-copy">
-          <h2 id="tryfit-dialog-title" class="tryfit-heading">FitSnap</h2>
+          <h2 id="tryfit-dialog-title" class="tryfit-heading">Brix-TryOn</h2>
           <p id="tryfit-dialog-desc" class="tryfit-subheading">
             See how this item looks on <em>you</em> before you buy.
           </p>
@@ -314,7 +314,7 @@
 
         <div class="tryfit-processing-copy">
           <h2 class="tryfit-heading">Creating your look&hellip;</h2>
-          <p id="tryfit-progress-msg" class="tryfit-progress-msg">FitSnap is creating your look&hellip;</p>
+          <p id="tryfit-progress-msg" class="tryfit-progress-msg">Brix-TryOn is creating your look&hellip;</p>
         </div>
 
         <p class="tryfit-processing-note">This usually takes 20&ndash;35 seconds</p>
@@ -337,6 +337,33 @@
             alt="Your try-on result"
             loading="lazy"
           >
+
+          <!-- Before/after comparison slider — hidden by default, shown by JS
+               only when before_after_enabled is on AND the user's original
+               photo is available. Sits on top of tryfit-result-img. -->
+          <div id="tryfit-compare" class="tryfit-compare" style="display:none;">
+            <img id="tryfit-compare-before" class="tryfit-compare-img" alt="Your original photo" loading="lazy">
+            <div id="tryfit-compare-after-wrap" class="tryfit-compare-after-wrap">
+              <img id="tryfit-compare-after" class="tryfit-compare-img" alt="Your try-on result" loading="lazy">
+            </div>
+            <span class="tryfit-compare-label tryfit-compare-label--before">Before</span>
+            <span class="tryfit-compare-label tryfit-compare-label--after">After</span>
+            <div
+              id="tryfit-compare-handle"
+              class="tryfit-compare-handle"
+              role="slider"
+              tabindex="0"
+              aria-label="Drag to compare before and after"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="50"
+            >
+              <span class="tryfit-compare-handle-grip" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6-6 6 6 6M15 6l6 6-6 6"/></svg>
+              </span>
+            </div>
+          </div>
+
           <button
             type="button"
             class="tryfit-zoom-btn"
@@ -591,7 +618,7 @@
     </div>
 
     <!-- Watermark — shown on all steps for free/basic plan merchants -->
-    <p class="tryfit-watermark" id="tryfit-watermark">Powered by <a href="https://thefitsnap.com" target="_blank" rel="noopener" class="tryfit-watermark-link">TheFitSnap</a></p>
+    <p class="tryfit-watermark" id="tryfit-watermark">Powered by <a href="https://thefitsnap.com" target="_blank" rel="noopener" class="tryfit-watermark-link">Brix-TryOn</a></p>
 
   </div><!-- /.tryfit-modal -->
 </div><!-- /#tryfit-overlay -->

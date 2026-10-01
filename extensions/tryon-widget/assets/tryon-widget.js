@@ -1,5 +1,5 @@
 /**
- * FitSnap virtual try-on widget  v2.1
+ * Brix-TryOn virtual try-on widget  v2.1
  * Enterprise production build — universal Shopify theme compatibility
  *
  * Architecture
@@ -1164,6 +1164,267 @@
       btn.style.setProperty("opacity", "1", "important");
       btn.style.setProperty("visibility", "visible", "important");
 
+      // ── 13. Before/after result slider ────────────────────────────────────
+      // (promo_video_url is applied in _injectProductButton — it renders
+      // below the button on the page, not inside this modal.)
+      this._beforeAfterEnabled = toBool(s.before_after_enabled, false);
+
+    },
+
+    // Builds and places the optional demo/promo video directly below the
+    // injected Try On button on the product page (not inside the modal —
+    // Fire-and-forget engagement ping for the Analytics "Engagement Funnel"
+    // (widget_open / camera_granted) — these happen before a tryon_sessions
+    // row exists, so they can't go through the session-scoped /session/track
+    // endpoint; this hits a separate public route keyed by shop domain only.
+    // Never blocks or surfaces errors — a dropped analytics ping is fine.
+    _trackWidgetEvent: function (eventName) {
+      try {
+        var proxyUrl = (this.config && this.config.proxyUrl) || "";
+        var shop = (this.config && this.config.shop) || window.location.hostname;
+        if (!proxyUrl) return;
+        fetch(proxyUrl + "/api/widget-event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shop: shop, event: eventName }),
+          keepalive: true,
+        }).catch(function () {});
+      } catch (ignore) {}
+    },
+
+    // it's a page-level teaser, shown whether or not the shopper ever opens
+    // the try-on flow). Direct video URLs get a plain <video> tag; YouTube/
+    // Vimeo links get an <iframe> embed since <video src> can't play those.
+    _applyPromoVideo: function (url, afterEl) {
+      var existing = document.getElementById("tryfit-page-promo-video");
+      if (existing && existing.parentNode) {
+        existing.parentNode.removeChild(existing);
+      }
+      if (!url || !afterEl) return;
+
+      var wrap = document.createElement("div");
+      wrap.id = "tryfit-page-promo-video";
+      wrap.className = "tryfit-page-promo-video tryfit-app-block";
+
+      var embedUrl = this._toEmbeddableVideoUrl(url);
+      if (embedUrl) {
+        var iframe = document.createElement("iframe");
+        iframe.src = embedUrl;
+        iframe.setAttribute(
+          "allow",
+          "autoplay; encrypted-media; picture-in-picture",
+        );
+        iframe.setAttribute("allowfullscreen", "");
+        iframe.setAttribute("title", "Try-on demo video");
+        wrap.appendChild(iframe);
+      } else {
+        var video = document.createElement("video");
+        video.src = url;
+        video.controls = true;
+        video.playsInline = true;
+        video.preload = "none";
+        wrap.appendChild(video);
+      }
+
+      afterEl.insertAdjacentElement("afterend", wrap);
+    },
+
+    _toEmbeddableVideoUrl: function (url) {
+      var yt = url.match(
+        /(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{11})/i,
+      );
+      if (yt) return "https://www.youtube.com/embed/" + yt[1];
+      var vimeo = url.match(/vimeo\.com\/(?:video\/)?(\d+)/i);
+      if (vimeo) return "https://player.vimeo.com/video/" + vimeo[1];
+      return null;
+    },
+
+    // Populates and reveals the before/after slider for the current result,
+    // or hides it and falls back to the plain result image when the feature
+    // is off or the user's original photo isn't available (e.g. re-run from
+    // a saved session where only the result was kept).
+    _applyCompareSlider: function (resultUrl) {
+      var wrap = document.getElementById("tryfit-compare");
+      var mainImg = document.getElementById("tryfit-result-img");
+      if (!wrap) return;
+
+      var beforeUrl = this._lastAvatarBase64;
+      if (!this._beforeAfterEnabled || !beforeUrl) {
+        wrap.style.display = "none";
+        if (mainImg) mainImg.style.display = "";
+        return;
+      }
+
+      var beforeImg = document.getElementById("tryfit-compare-before");
+      var afterImg = document.getElementById("tryfit-compare-after");
+      if (beforeImg) beforeImg.src = beforeUrl;
+      if (afterImg) afterImg.src = resultUrl;
+
+      wrap.style.display = "";
+      // The comparison overlay sits on top of tryfit-result-frame; hide the
+      // plain image underneath (its .src stays set — save/share/zoom actions
+      // read it directly) so it doesn't show through at the slider's edges.
+      if (mainImg) mainImg.style.display = "none";
+
+      var refs = {
+        wrap: wrap,
+        afterWrap: document.getElementById("tryfit-compare-after-wrap"),
+        afterImg: afterImg,
+        handle: document.getElementById("tryfit-compare-handle"),
+      };
+      this._setSliderPos(refs, 50);
+      this._bindSliderDrag(refs);
+    },
+
+    // Generic drag-slider math shared by the modal's result comparison and
+    // the page-level example slider — pct is the after-layer's reveal width.
+    _setSliderPos: function (refs, pct) {
+      pct = Math.max(0, Math.min(100, pct));
+      if (!refs.wrap || !refs.afterWrap || !refs.handle) return;
+
+      var w = refs.wrap.offsetWidth;
+      var h = refs.wrap.offsetHeight;
+      refs.afterWrap.style.width = pct + "%";
+      if (refs.afterImg) {
+        refs.afterImg.style.width = w + "px";
+        refs.afterImg.style.height = h + "px";
+      }
+      refs.handle.style.left = pct + "%";
+      refs.handle.setAttribute("aria-valuenow", String(Math.round(pct)));
+    },
+
+    // Binds drag/keyboard interaction for one slider instance. Guards on the
+    // wrap element itself (not `this`) so multiple independent sliders (the
+    // modal's result compare + the page-level example slider) can each bind
+    // exactly once without stepping on each other.
+    _bindSliderDrag: function (refs) {
+      if (!refs.wrap || !refs.handle || refs.wrap._tryfitDragBound) return;
+      refs.wrap._tryfitDragBound = true;
+
+      var self = this;
+      var wrap = refs.wrap;
+      var handle = refs.handle;
+      var dragging = false;
+
+      var move = function (clientX) {
+        var rect = wrap.getBoundingClientRect();
+        if (!rect.width) return;
+        self._setSliderPos(refs, ((clientX - rect.left) / rect.width) * 100);
+      };
+
+      var onPointerDown = function (e) {
+        dragging = true;
+        var x = e.touches ? e.touches[0].clientX : e.clientX;
+        move(x);
+        e.preventDefault();
+      };
+      var onPointerMove = function (e) {
+        if (!dragging) return;
+        var x = e.touches ? e.touches[0].clientX : e.clientX;
+        move(x);
+      };
+      var onPointerUp = function () {
+        dragging = false;
+      };
+
+      handle.addEventListener("mousedown", onPointerDown);
+      wrap.addEventListener("mousedown", onPointerDown);
+      document.addEventListener("mousemove", onPointerMove);
+      document.addEventListener("mouseup", onPointerUp);
+
+      handle.addEventListener("touchstart", onPointerDown, { passive: false });
+      wrap.addEventListener("touchstart", onPointerDown, { passive: false });
+      document.addEventListener("touchmove", onPointerMove, { passive: true });
+      document.addEventListener("touchend", onPointerUp);
+
+      handle.addEventListener("keydown", function (e) {
+        var cur = parseFloat(handle.getAttribute("aria-valuenow")) || 50;
+        if (e.key === "ArrowLeft") {
+          self._setSliderPos(refs, cur - 5);
+          e.preventDefault();
+        } else if (e.key === "ArrowRight") {
+          self._setSliderPos(refs, cur + 5);
+          e.preventDefault();
+        }
+      });
+
+      window.addEventListener("resize", function () {
+        var cur = parseFloat(handle.getAttribute("aria-valuenow"));
+        if (!isNaN(cur) && wrap.style.display !== "none") self._setSliderPos(refs, cur);
+      });
+    },
+
+    // Builds and inserts the merchant's static example before/after slider
+    // (marketing sample, not a real shopper's photo) above or below the
+    // injected Try On button, per example_slider_position. Both image URLs
+    // must be set — this is separate from and independent of the live
+    // per-shopper result slider (_applyCompareSlider) inside the modal.
+    _applyExampleSlider: function (s, buttonEl) {
+      var existing = document.getElementById("tryfit-page-example-slider");
+      if (existing && existing.parentNode) {
+        existing.parentNode.removeChild(existing);
+      }
+
+      var beforeUrl = s.example_before_image || "";
+      var afterUrl = s.example_after_image || "";
+      if (!beforeUrl || !afterUrl || !buttonEl) return;
+
+      var wrap = document.createElement("div");
+      wrap.id = "tryfit-page-example-slider";
+      wrap.className = "tryfit-compare tryfit-page-example-slider tryfit-app-block";
+
+      var beforeImg = document.createElement("img");
+      beforeImg.className = "tryfit-compare-img";
+      beforeImg.src = beforeUrl;
+      beforeImg.alt = "Before";
+      beforeImg.loading = "lazy";
+
+      var afterWrap = document.createElement("div");
+      afterWrap.id = "tryfit-example-after-wrap";
+      afterWrap.className = "tryfit-compare-after-wrap";
+      var afterImg = document.createElement("img");
+      afterImg.className = "tryfit-compare-img";
+      afterImg.src = afterUrl;
+      afterImg.alt = "After";
+      afterImg.loading = "lazy";
+      afterWrap.appendChild(afterImg);
+
+      var handle = document.createElement("div");
+      handle.className = "tryfit-compare-handle";
+      handle.setAttribute("role", "slider");
+      handle.setAttribute("tabindex", "0");
+      handle.setAttribute("aria-label", "Drag to compare before and after");
+      handle.setAttribute("aria-valuemin", "0");
+      handle.setAttribute("aria-valuemax", "100");
+      handle.setAttribute("aria-valuenow", "50");
+      var grip = document.createElement("span");
+      grip.className = "tryfit-compare-handle-grip";
+      grip.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6-6 6 6 6M15 6l6 6-6 6"/></svg>';
+      handle.appendChild(grip);
+
+      var labelBefore = document.createElement("span");
+      labelBefore.className = "tryfit-compare-label tryfit-compare-label--before";
+      labelBefore.textContent = "Before";
+      var labelAfter = document.createElement("span");
+      labelAfter.className = "tryfit-compare-label tryfit-compare-label--after";
+      labelAfter.textContent = "After";
+
+      wrap.appendChild(beforeImg);
+      wrap.appendChild(afterWrap);
+      wrap.appendChild(labelBefore);
+      wrap.appendChild(labelAfter);
+      wrap.appendChild(handle);
+
+      if (s.example_slider_position === "above_button") {
+        buttonEl.insertAdjacentElement("beforebegin", wrap);
+      } else {
+        buttonEl.insertAdjacentElement("afterend", wrap);
+      }
+
+      var refs = { wrap: wrap, afterWrap: afterWrap, afterImg: afterImg, handle: handle };
+      this._setSliderPos(refs, 50);
+      this._bindSliderDrag(refs);
     },
 
     _matchThemeBuyButton: function (btn) {
@@ -1475,6 +1736,9 @@
         container.insertAdjacentElement("afterend", wrap);
       }
       log("product button injected");
+
+      this._applyPromoVideo(s.promo_video_url, wrap);
+      this._applyExampleSlider(s, wrap);
     },
 
     _parseJsonDataset: function (value, fallback) {
@@ -1993,6 +2257,7 @@
     // ══════════════════════════════════════════════════════════════════════
 
     openModal: function () {
+      this._trackWidgetEvent("widget_open");
       this._ensureOverlayInBody();
 
       var overlay = document.getElementById("tryfit-overlay");
@@ -2268,7 +2533,7 @@
 
       this.toJpegBlob(file)
         .then(function (blob) {
-          self.showProgress("FitSnap is creating your look…");
+          self.showProgress("Brix-TryOn is creating your look…");
           self.startProgressAnimation(28);
           return self._createSession().then(function () {
             return self.runTryOn(blob);
@@ -2642,6 +2907,7 @@
         img.src = imageUrl;
         img.alt = "Your virtual try-on result";
       }
+      this._applyCompareSlider(imageUrl);
 
       var titleEl = document.getElementById("tryfit-result-product-title");
       if (titleEl) titleEl.textContent = this.config.productTitle || "";
@@ -3408,7 +3674,7 @@
       if (clothingImage.indexOf("//") === 0) clothingImage = "https:" + clothingImage;
 
       this._showStep("processing");
-      this.showProgress("FitSnap is creating your look…");
+      this.showProgress("Brix-TryOn is creating your look…");
 
       this.startProgressAnimation(28);
 
@@ -3890,6 +4156,7 @@
       this._getCameraStream(this._facingMode)
         .then(function (stream) {
           self._cameraStream = stream;
+          self._trackWidgetEvent("camera_granted");
           var video = document.getElementById("tryfit-camera-video");
           if (!video) {
             self._closeCameraStream();
